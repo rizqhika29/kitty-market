@@ -1,0 +1,4 @@
+# Contract tooling (Python 3.12+)
+genlayer-test
+genvm-linter
+pytest

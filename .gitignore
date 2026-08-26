@@ -1,0 +1,52 @@
+# dependencies
+/node_modules
+/.pnp
+.pnp.js
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# local env files
+.env*.local
+.env
+.deploy-key.json
+
+# deployment/test artifacts & keys
+.deploy-state.json
+.test-log.json
+.negative-log.json
+.test-run.log
+.test-run.err
+.neg-run.log
+.neg-run.err
+.fin-run.log
+.fin-run.err
+artifacts/
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
