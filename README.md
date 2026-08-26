@@ -42,8 +42,17 @@ side with GEN, and let consensus fetch reality.
 
 ## 📜 Contract
 
-Deploy `contracts/kitty_market.py` through GenLayer Studio, then set
-`NEXT_PUBLIC_CONTRACT_ADDRESS`.
+**Live on Studionet:**
+
+```
+Address : 0x13C2bc0722780691D498A58391057eA70b37ccfF
+Network : GenLayer Studionet (Chain ID 61999)
+RPC     : https://studio.genlayer.com/api
+Explorer: https://explorer-studio.genlayer.com/address/0x13C2bc0722780691D498A58391057eA70b37ccfF
+```
+
+To deploy your own instance, run `contracts/kitty_market.py` through
+GenLayer Studio and point `NEXT_PUBLIC_CONTRACT_ADDRESS` at it.
 
 ### Write methods
 
