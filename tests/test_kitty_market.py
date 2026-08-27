@@ -568,3 +568,94 @@ def test_open_rejects_distant_close(vm, contract, accounts, host):
         contract.open_market(
             "Q", "crypto", "https://example.com", BASE_TS + 400 * DAY, 0, 0
         )
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 8. Transient-failure retryable path (staff regression requirement)
+# ════════════════════════════════════════════════════════════════════════
+
+def test_transient_failure_returns_retryable_not_void(vm, contract, accounts, host):
+    """A transient fetch/decode error must NOT permanently void the market.
+    The response should indicate retryable=True so the caller can retry
+    later without losing the funded stakes."""
+    alice, bob = accounts[0], accounts[1]
+    join(vm, contract, host, "host")
+    join(vm, contract, alice, "alice")
+    join(vm, contract, bob, "bob")
+
+    mid = open_market(vm, contract, host)
+    stake(vm, contract, alice, mid, "yes", 50)
+    stake(vm, contract, bob, mid, "no", 50)
+
+    vm.warp(iso(AFTER_CLOSE))
+    vm.value = 0
+    vm.mock_web(r"coingecko\.com", {"status": 200, "body": b"\xff\xfe"})
+    vm.mock_llm(r".*", '{"note": "ok", "outcome": "yes"}')
+    result = json.loads(contract.settle_market(mid))
+
+    assert result.get("retryable") is True
+    assert result.get("settled") is False
+
+    market = json.loads(contract.get_market(mid))
+    assert market["settled"] is False
+    assert market["outcome"] == ""
+
+
+def test_transient_failure_preserves_market_state(vm, contract, accounts, host):
+    """After a transient failure the market stays open with all state
+    preserved — no void, no settlement, stakes intact."""
+    alice = accounts[0]
+    join(vm, contract, host, "host")
+    join(vm, contract, alice, "alice")
+
+    mid = open_market(vm, contract, host)
+    stake(vm, contract, alice, mid, "yes", 100)
+
+    vm.warp(iso(AFTER_CLOSE))
+
+    # Transient failure — invalid bytes → decode error
+    vm.value = 0
+    vm.mock_web(r"coingecko\.com", {"status": 200, "body": b"\xff\xfe"})
+    vm.mock_llm(r".*", '{"note": "", "outcome": "yes"}')
+    result = json.loads(contract.settle_market(mid))
+
+    assert result.get("retryable") is True
+    assert result.get("settled") is False
+
+    # Market completely unchanged — not voided, stakes intact
+    market = json.loads(contract.get_market(mid))
+    assert market["settled"] is False
+    assert market["outcome"] == ""
+    assert market["yes_pool"] == "100"
+    assert market["pool"] == "100"
+
+    # No fee was taken
+    assert vault(vm, contract) == 0
+
+    # Alice's stake is still locked
+    assert wallet(vm, contract, alice) == 0
+
+    # claim_payout and reclaim_stake both reject unsettled markets
+    assert "not settled" in claim(vm, contract, alice, mid)
+    assert "not settled" in reclaim(vm, contract, alice, mid)
+
+
+def test_permanent_failure_voids_market(vm, contract, accounts, host):
+    """A permanent failure (garbage LLM output) should still void the
+    market so stakes become reclaimable."""
+    alice = accounts[0]
+    join(vm, contract, host, "host")
+    join(vm, contract, alice, "alice")
+
+    mid = open_market(vm, contract, host)
+    stake(vm, contract, alice, mid, "yes", 80)
+
+    vm.warp(iso(AFTER_CLOSE))
+    result = json.loads(settle_garbage(vm, contract, mid))
+    assert result["outcome"] == "void"
+
+    market = json.loads(contract.get_market(mid))
+    assert market["settled"] is True
+    assert market["outcome"] == "void"
+
+    assert json.loads(reclaim(vm, contract, alice, mid))["returned"] == "80"

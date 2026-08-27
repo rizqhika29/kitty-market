@@ -21,6 +21,9 @@ type AnyProvider = { request: (req: any) => Promise<unknown> };
 
 let readClient: GlClient | null = null;
 
+/* Cache write clients per provider so the SDK only initialises once. */
+const writerCache = new WeakMap<object, GlClient>();
+
 /**
  * Force legacy type-0 transactions with zero gas price — what the
  * GenLayer VM expects from injected EVM wallets.
@@ -56,12 +59,26 @@ export function reader(): GlClient {
   return readClient;
 }
 
-/** Client bound to a connected account for write calls. */
+/**
+ * Client bound to a connected account for write calls.
+ * Caches per provider so the SDK is initialised only once, preventing
+ * the first write from failing due to un-initialised provider state.
+ */
 export function writer(address: string, provider?: AnyProvider | null): GlClient {
+  if (provider) {
+    const existing = writerCache.get(provider as object);
+    if (existing) return existing;
+    const client = createClient({
+      chain: studionet,
+      account: address as `0x${string}`,
+      provider: tameProvider(provider),
+    });
+    writerCache.set(provider as object, client);
+    return client;
+  }
   return createClient({
     chain: studionet,
     account: address as `0x${string}`,
-    ...(provider ? { provider: tameProvider(provider) } : {}),
   });
 }
 

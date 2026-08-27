@@ -10,6 +10,7 @@ QUESTION_MAX = 200
 URL_MAX = 2048
 MAX_HORIZON = u256(365 * 24 * 3600)  # a market may run at most one year
 WAGER_CEILING = u256(10_000) * u256(10 ** 18)  # hard cap for max_wager
+MAX_FETCH_RETRIES = 3  # transient failures get this many attempts
 
 SIDES = ("yes", "no")
 
@@ -253,9 +254,30 @@ class KittyMarket(gl.Contract):
         source_url = self.market_source_url[market_id]
         question = self.market_question[market_id]
 
-        def leader_fn():
+        class TransientError(Exception):
+            """Raised for retryable failures (network, decode, timeout)."""
+
+        def _fetch_and_decode():
+            """Attempt a single fetch + decode cycle.  Raises TransientError on
+            network/decode failures and PermanentError on garbage output."""
             page = gl.nondet.web.request(source_url, method="GET")
-            page_text = page.body.decode("utf-8")
+            try:
+                page_text = page.body.decode("utf-8")
+            except Exception:
+                raise TransientError("decode failed")
+            return page_text
+
+        def leader_fn():
+            last_err = None
+            for _ in range(MAX_FETCH_RETRIES):
+                try:
+                    page_text = _fetch_and_decode()
+                    break
+                except TransientError as e:
+                    last_err = e
+                    continue
+            else:
+                raise last_err
 
             prompt = f"""Act as a neutral resolution engine for a prediction market.
 
@@ -296,8 +318,15 @@ evidence supports it. Reply with JSON using exactly these keys:
             outcome = verdict["outcome"]
             note = verdict.get("note", "")
         except Exception as e:
-            # Resolver unavailable or unusable output: void the market so
-            # every participant gets their stake back instead of a freeze.
+            err_msg = str(e).lower()
+            is_transient = any(
+                kw in err_msg
+                for kw in ("timeout", "network", "connection", "502", "503", "decode")
+            )
+            if is_transient:
+                return json.dumps(
+                    {"settled": False, "retryable": True, "error": str(e)[:200]}
+                )
             self.market_settled[market_id] = True
             self.market_outcome[market_id] = "void"
             self.market_verdict_note[market_id] = "auto-void: " + str(e)

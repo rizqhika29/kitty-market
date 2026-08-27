@@ -9,7 +9,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { marketContract, NETWORK, reader } from "@/lib/gl";
+import { marketContract, NETWORK, reader, writer } from "@/lib/gl";
 import {
   hasWalletChoice,
   type InjectedProvider,
@@ -135,6 +135,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         setBooting(false);
 
         await switchToGenLayer(wallet);
+
+        // Eagerly initialise the SDK writer so the first real write
+        // does not fail due to un-initialised provider state.
+        try {
+          writer(accounts[0], wallet);
+        } catch {
+          // non-fatal — will retry on first actual write
+        }
+
         await fetchProfile(accounts[0]);
         return true;
       } catch (e) {
@@ -182,6 +191,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         if (accounts.length > 0) {
           setAccount(accounts[0]);
           setProvider(window.ethereum);
+
+          // Eagerly initialise SDK writer for the cached provider.
+          try {
+            writer(accounts[0], window.ethereum);
+          } catch {
+            // non-fatal
+          }
+
           await fetchProfile(accounts[0]);
         } else {
           setBooting(false);
