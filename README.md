@@ -45,10 +45,10 @@ side with GEN, and let consensus fetch reality.
 **Live on Studionet:**
 
 ```
-Address : 0x13C2bc0722780691D498A58391057eA70b37ccfF
+Address : 0xcA6B6e2E48822f8B73cb76B25DDd69fF62160Dd4
 Network : GenLayer Studionet (Chain ID 61999)
 RPC     : https://studio.genlayer.com/api
-Explorer: https://explorer-studio.genlayer.com/address/0x13C2bc0722780691D498A58391057eA70b37ccfF
+Explorer: https://explorer-studio.genlayer.com/address/0xcA6B6e2E48822f8B73cb76B25DDd69fF62160Dd4
 ```
 
 To deploy your own instance, run `contracts/kitty_market.py` through
@@ -90,6 +90,9 @@ get_fee_rate()            get_fee_balance()     get_owner()
   forbids them from holding any position in their own market.
 - **Void semantics**: resolver failure or a verdict nobody backed voids the
   market; `reclaim_stake` returns every stake at full value, no fee.
+- **Transient retry**: transient fetch/decode errors (network timeout, 502/503,
+  decode failure) are retried up to 3 times before giving up. Only persistent
+  failures void the market — temporary glitches leave it unsettled for retry.
 
 ## 🧪 Testing
 
@@ -102,7 +105,7 @@ pytest tests/ -v
 
 Covers: fee-once integrity, lifecycle enforcement, void/refund paths,
 fund conservation across outcomes, host lockout, wager-cap enforcement,
-and input validation.
+input validation, and transient-failure retryable path (29 tests).
 
 Lint the contract:
 
