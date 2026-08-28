@@ -27,13 +27,13 @@ export interface TraderProfile {
   calls_total: string;
 }
 
-interface SessionValue {
+export interface SessionValue {
   account: string | null;
   provider: InjectedProvider | null;
   profile: TraderProfile | null;
   joined: boolean;
   booting: boolean;
-  connect: () => Promise<boolean>;
+  connect: () => Promise<{ account: string; provider: InjectedProvider } | null>;
   disconnect: () => void;
   reloadProfile: () => Promise<void>;
 }
@@ -44,7 +44,7 @@ const SessionContext = createContext<SessionValue>({
   profile: null,
   joined: false,
   booting: true,
-  connect: async () => false,
+  connect: async () => null,
   disconnect: () => {},
   reloadProfile: async () => {},
 });
@@ -124,7 +124,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const adoptProvider = useCallback(
-    async (wallet: InjectedProvider): Promise<boolean> => {
+    async (wallet: InjectedProvider): Promise<{ account: string; provider: InjectedProvider } | null> => {
       try {
         const accounts = (await wallet.request({
           method: "eth_requestAccounts",
@@ -145,23 +145,23 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         }
 
         await fetchProfile(accounts[0]);
-        return true;
+        return { account: accounts[0], provider: wallet };
       } catch (e) {
         console.error("[session] connect failed:", e);
-        return false;
+        return null;
       }
     },
     [fetchProfile]
   );
 
-  const connect = useCallback(async (): Promise<boolean> => {
+  const connect = useCallback(async (): Promise<{ account: string; provider: InjectedProvider } | null> => {
     if (typeof window === "undefined" || !window.ethereum) {
       alert("Install an EVM wallet (MetaMask, Rabby, Coinbase…) to continue.");
-      return false;
+      return null;
     }
     if (hasWalletChoice()) {
       setPickerOpen(true);
-      return false;
+      return null;
     }
     return adoptProvider(window.ethereum);
   }, [adoptProvider]);

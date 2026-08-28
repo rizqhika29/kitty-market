@@ -106,9 +106,19 @@ export default function PortfolioPage() {
       return;
     }
 
+    let useAccount = account;
+    let useProvider = provider;
+    if (!useAccount) {
+      toast.info("Connecting wallet…");
+      const fresh = await connect();
+      if (!fresh) return;
+      useAccount = fresh.account;
+      useProvider = fresh.provider;
+    }
+
     setBusy(true);
     try {
-      const client = writer(account as `0x${string}`, provider);
+      const client = writer(useAccount as `0x${string}`, useProvider);
       const txHash = await client.writeContract({
         address: marketContract() as `0x${string}`,
         functionName: "cash_out",
@@ -137,9 +147,20 @@ export default function PortfolioPage() {
       toast.error("Enter a valid amount");
       return;
     }
+
+    let useAccount = account;
+    let useProvider = provider;
+    if (!useAccount) {
+      toast.info("Connecting wallet…");
+      const fresh = await connect();
+      if (!fresh) return;
+      useAccount = fresh.account;
+      useProvider = fresh.provider;
+    }
+
     setFeeBusy(true);
     try {
-      const client = writer(account as `0x${string}`, provider);
+      const client = writer(useAccount as `0x${string}`, useProvider);
       const txHash = await client.writeContract({
         address: marketContract() as `0x${string}`,
         functionName: "collect_fees",

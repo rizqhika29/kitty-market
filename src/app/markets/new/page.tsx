@@ -43,14 +43,19 @@ export default function NewMarketPage() {
       return;
     }
 
-    if (!account) {
+    let useAccount = account;
+    let useProvider = provider;
+    if (!useAccount) {
       toast.info("Connecting wallet first…");
-      if (!(await connect())) return;
+      const fresh = await connect();
+      if (!fresh) return;
+      useAccount = fresh.account;
+      useProvider = fresh.provider;
     }
 
     setBusy(true);
     try {
-      const client = writer(account as `0x${string}`, provider);
+      const client = writer(useAccount as `0x${string}`, useProvider);
       const contract = marketContract();
       if (!contract) {
         toast.error("Contract address missing in .env");

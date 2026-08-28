@@ -257,28 +257,22 @@ class KittyMarket(gl.Contract):
         class TransientError(Exception):
             """Raised for retryable failures (network, decode, timeout)."""
 
-        def _fetch_and_decode():
-            """Attempt a single fetch + decode cycle.  Raises TransientError on
-            network/decode failures and PermanentError on garbage output."""
-            page = gl.nondet.web.request(source_url, method="GET")
+        def _fetch_page():
+            """Fetch the evidence page.  Raises TransientError on any
+            network or decode failure."""
             try:
-                page_text = page.body.decode("utf-8")
-            except Exception:
-                raise TransientError("decode failed")
-            return page_text
+                page = gl.nondet.web.request(source_url, method="GET")
+            except Exception as e:
+                raise TransientError("fetch failed: " + str(e)[:120])
+            try:
+                return page.body.decode("utf-8")
+            except Exception as e:
+                raise TransientError("decode failed: " + str(e)[:120])
 
-        def leader_fn():
-            last_err = None
-            for _ in range(MAX_FETCH_RETRIES):
-                try:
-                    page_text = _fetch_and_decode()
-                    break
-                except TransientError as e:
-                    last_err = e
-                    continue
-            else:
-                raise last_err
-
+        def _ask_llm(page_text):
+            """Prompt the LLM and validate the JSON response.  Raises
+            TransientError on transient LLM failures, UserError on
+            permanent garbage output."""
             prompt = f"""Act as a neutral resolution engine for a prediction market.
 
 Question under judgment: {question}
@@ -292,7 +286,10 @@ Decide whether the question resolves to yes or no, citing what in the
 evidence supports it. Reply with JSON using exactly these keys:
 {{"note": "concise factual justification", "outcome": "yes" or "no"}}"""
 
-            result = gl.nondet.exec_prompt(prompt, response_format="json")
+            try:
+                result = gl.nondet.exec_prompt(prompt, response_format="json")
+            except Exception as e:
+                raise TransientError("llm failed: " + str(e)[:120])
 
             if not isinstance(result, dict):
                 raise gl.vm.UserError(f"resolver returned {type(result)}")
@@ -301,11 +298,26 @@ evidence supports it. Reply with JSON using exactly these keys:
 
             return result
 
+        def leader_fn():
+            last_err = None
+            for _ in range(MAX_FETCH_RETRIES):
+                try:
+                    page_text = _fetch_page()
+                    break
+                except TransientError as e:
+                    last_err = e
+                    continue
+            else:
+                raise last_err
+
+            return _ask_llm(page_text)
+
         def validator_fn(leader_result) -> bool:
             if not isinstance(leader_result, gl.vm.Return):
                 return False
             try:
-                replay = leader_fn()
+                page_text = _fetch_page()
+                replay = _ask_llm(page_text)
             except Exception:
                 return False
             first = leader_result.calldata
@@ -317,20 +329,15 @@ evidence supports it. Reply with JSON using exactly these keys:
             verdict = gl.vm.run_nondet_unsafe(leader_fn, validator_fn)
             outcome = verdict["outcome"]
             note = verdict.get("note", "")
-        except Exception as e:
-            err_msg = str(e).lower()
-            is_transient = any(
-                kw in err_msg
-                for kw in ("timeout", "network", "connection", "502", "503", "decode")
-            )
-            if is_transient:
-                return json.dumps(
-                    {"settled": False, "retryable": True, "error": str(e)[:200]}
-                )
+        except gl.vm.UserError as e:
             self.market_settled[market_id] = True
             self.market_outcome[market_id] = "void"
             self.market_verdict_note[market_id] = "auto-void: " + str(e)
             return json.dumps({"settled": True, "outcome": "void"})
+        except Exception as e:
+            return json.dumps(
+                {"settled": False, "retryable": True, "error": str(e)[:200]}
+            )
 
         winning_pot = (
             self.market_yes_pool.get(market_id, u256(0))

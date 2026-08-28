@@ -17,6 +17,7 @@ import {
 import { toast } from "sonner";
 import { marketContract, reader, toGen, toWei, writer } from "@/lib/gl";
 import { useSession } from "@/lib/session";
+import type { InjectedProvider } from "@/lib/wallets";
 import type { Market, Position } from "@/lib/types";
 import { formatClose, isExpired, splitPools } from "@/lib/types";
 
@@ -94,10 +95,12 @@ export default function MarketDetailPage({ params }: { params: { id: string } })
     })();
   }, [loadMarket, loadPositions]);
 
-  async function ensureWallet(): Promise<boolean> {
-    if (account) return true;
+  async function ensureWallet(): Promise<{ addr: string; prov: InjectedProvider } | null> {
+    if (account && provider) return { addr: account, prov: provider };
     toast.info("Connecting wallet…");
-    return connect();
+    const fresh = await connect();
+    if (!fresh) return null;
+    return { addr: fresh.account, prov: fresh.provider };
   }
 
   async function takeSide() {
@@ -106,7 +109,8 @@ export default function MarketDetailPage({ params }: { params: { id: string } })
       toast.error("Enter a stake amount");
       return;
     }
-    if (!(await ensureWallet())) return;
+    const wallet = await ensureWallet();
+    if (!wallet) return;
 
     // Client-side cap check for fast feedback.
     if (market) {
@@ -128,7 +132,7 @@ export default function MarketDetailPage({ params }: { params: { id: string } })
 
     setBusy("stake");
     try {
-      const client = writer(account as `0x${string}`, provider);
+      const client = writer(wallet.addr, wallet.prov);
       const txHash = await client.writeContract({
         address: marketContract() as `0x${string}`,
         functionName: "take_side",
@@ -153,12 +157,13 @@ export default function MarketDetailPage({ params }: { params: { id: string } })
   }
 
   async function settle() {
-    if (!(await ensureWallet())) return;
+    const wallet = await ensureWallet();
+    if (!wallet) return;
 
     setBusy("settle");
     setPhaseNote("Sending settlement transaction…");
     try {
-      const client = writer(account as `0x${string}`, provider);
+      const client = writer(wallet.addr, wallet.prov);
       const txHash = await client.writeContract({
         address: marketContract() as `0x${string}`,
         functionName: "settle_market",
@@ -195,10 +200,11 @@ export default function MarketDetailPage({ params }: { params: { id: string } })
   }
 
   async function claimPayout() {
-    if (!(await ensureWallet())) return;
+    const wallet = await ensureWallet();
+    if (!wallet) return;
     setBusy("claim");
     try {
-      const client = writer(account as `0x${string}`, provider);
+      const client = writer(wallet.addr, wallet.prov);
       const txHash = await client.writeContract({
         address: marketContract() as `0x${string}`,
         functionName: "claim_payout",
@@ -229,10 +235,11 @@ export default function MarketDetailPage({ params }: { params: { id: string } })
   }
 
   async function reclaim() {
-    if (!(await ensureWallet())) return;
+    const wallet = await ensureWallet();
+    if (!wallet) return;
     setBusy("reclaim");
     try {
-      const client = writer(account as `0x${string}`, provider);
+      const client = writer(wallet.addr, wallet.prov);
       const txHash = await client.writeContract({
         address: marketContract() as `0x${string}`,
         functionName: "reclaim_stake",

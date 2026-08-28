@@ -45,10 +45,10 @@ side with GEN, and let consensus fetch reality.
 **Live on Studionet:**
 
 ```
-Address : 0xcA6B6e2E48822f8B73cb76B25DDd69fF62160Dd4
+Address : 0x896c3aA69dC8e571A6301B8AfA4966A8321e82A6
 Network : GenLayer Studionet (Chain ID 61999)
 RPC     : https://studio.genlayer.com/api
-Explorer: https://explorer-studio.genlayer.com/address/0xcA6B6e2E48822f8B73cb76B25DDd69fF62160Dd4
+Explorer: https://explorer-studio.genlayer.com/address/0x896c3aA69dC8e571A6301B8AfA4966A8321e82A6
 ```
 
 To deploy your own instance, run `contracts/kitty_market.py` through
