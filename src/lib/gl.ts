@@ -21,8 +21,10 @@ type AnyProvider = { request: (req: any) => Promise<unknown> };
 
 let readClient: GlClient | null = null;
 
-/* Cache write clients per provider so the SDK only initialises once. */
+/* Cache write clients per provider so the SDK only initialises once.
+   Keyed by provider object; cleared on disconnect to avoid stale accounts. */
 const writerCache = new WeakMap<object, GlClient>();
+let cachedProvider: object | null = null;
 
 /**
  * Force legacy type-0 transactions with zero gas price — what the
@@ -74,12 +76,18 @@ export function writer(address: string, provider?: AnyProvider | null): GlClient
       provider: tameProvider(provider),
     });
     writerCache.set(provider as object, client);
+    cachedProvider = provider as object;
     return client;
   }
   return createClient({
     chain: studionet,
     account: address as `0x${string}`,
   });
+}
+
+/** Invalidate cached write client (call on disconnect). */
+export function invalidateWriter(): void {
+  cachedProvider = null;
 }
 
 /** Format wei -> GEN string. */

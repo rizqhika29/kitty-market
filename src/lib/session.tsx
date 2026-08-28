@@ -6,10 +6,11 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
-import { marketContract, NETWORK, reader, writer } from "@/lib/gl";
+import { marketContract, NETWORK, reader, writer, invalidateWriter } from "@/lib/gl";
 import {
   hasWalletChoice,
   type InjectedProvider,
@@ -93,6 +94,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [booting, setBooting] = useState(true);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [onboardOpen, setOnboardOpen] = useState(false);
+  const connectResolver = useRef<((v: { account: string; provider: InjectedProvider } | null) => void) | null>(null);
 
   const fetchProfile = useCallback(async (addr: string) => {
     const contract = marketContract();
@@ -160,8 +162,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       return null;
     }
     if (hasWalletChoice()) {
-      setPickerOpen(true);
-      return null;
+      return new Promise<{ account: string; provider: InjectedProvider } | null>((resolve) => {
+        connectResolver.current = resolve;
+        setPickerOpen(true);
+      });
     }
     return adoptProvider(window.ethereum);
   }, [adoptProvider]);
@@ -171,6 +175,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     setProvider(null);
     setProfile(null);
     setOnboardOpen(false);
+    invalidateWriter();
   }, []);
 
   const reloadProfile = useCallback(async () => {
@@ -210,6 +215,33 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     })();
   }, [fetchProfile]);
 
+  // Listen for account/chain changes in the injected wallet.
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.ethereum) return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const eth = window.ethereum as any;
+
+    const onAccountsChanged = (accounts: string[]) => {
+      if (accounts.length === 0) {
+        setAccount(null);
+        setProvider(null);
+        setProfile(null);
+        invalidateWriter();
+        return;
+      }
+      const newAddr = accounts[0];
+      setAccount(newAddr);
+      invalidateWriter();
+      setProvider(window.ethereum ?? null);
+      void fetchProfile(newAddr);
+    };
+
+    eth.on?.("accountsChanged", onAccountsChanged);
+    return () => {
+      eth.removeListener?.("accountsChanged", onAccountsChanged);
+    };
+  }, [fetchProfile]);
+
   const value = useMemo<SessionValue>(
     () => ({
       account,
@@ -229,11 +261,21 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       {children}
       {pickerOpen && (
         <WalletModal
-          onPick={(w) => {
+          onPick={async (w) => {
             setPickerOpen(false);
-            void adoptProvider(w);
+            const result = await adoptProvider(w);
+            if (connectResolver.current) {
+              connectResolver.current(result);
+              connectResolver.current = null;
+            }
           }}
-          onClose={() => setPickerOpen(false)}
+          onClose={() => {
+            setPickerOpen(false);
+            if (connectResolver.current) {
+              connectResolver.current(null);
+              connectResolver.current = null;
+            }
+          }}
         />
       )}
       {onboardOpen && account && (
