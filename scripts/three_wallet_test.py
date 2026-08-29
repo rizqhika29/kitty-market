@@ -200,7 +200,7 @@ def main() -> int:
 
     write(alice, "open_market", Q_BTC, "crypto", SRC, CLOSE_AC, 0, 0)          # id 0
     write(bob, "open_market", Q_ETH, "tech", SRC_ETH, CLOSE_B, 0, 0)           # id 1
-    write(dep, "open_market", Q_BTC, "other", SRC, CLOSE_AC, 10**16, 5 * 10**16)  # id 2 capped
+    write(dep, "open_market", Q_BTC, "other", SRC + ", " + SRC_ETH, CLOSE_AC, 10**16, 5 * 10**16)  # id 2 capped, multi-source
 
     m0 = json.loads(view("get_market", "0"))
     m1 = json.loads(view("get_market", "1"))

@@ -19,7 +19,7 @@ import { marketContract, reader, toGen, toWei, writer } from "@/lib/gl";
 import { useSession } from "@/lib/session";
 import type { InjectedProvider } from "@/lib/wallets";
 import type { Market, Position } from "@/lib/types";
-import { formatClose, isExpired, splitPools } from "@/lib/types";
+import { formatClose, isExpired, parseSourceUrls, splitPools } from "@/lib/types";
 
 export default function MarketDetailPage({ params }: { params: { id: string } }) {
   const { id } = params;
@@ -399,16 +399,21 @@ export default function MarketDetailPage({ params }: { params: { id: string } })
               />
               <Meta
                 icon={ExternalLink}
-                k="Evidence"
+                k="Sources"
                 v={
-                  <a
-                    href={market.source_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="block truncate text-brand-300 hover:text-punch-300"
-                  >
-                    {safeHost(market.source_url)}
-                  </a>
+                  <div className="space-y-1">
+                    {parseSourceUrls(market.source_urls).map((url, i) => (
+                      <a
+                        key={i}
+                        href={url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="block truncate text-brand-300 hover:text-punch-300"
+                      >
+                        {safeHost(url)}
+                      </a>
+                    ))}
+                  </div>
                 }
               />
             </dl>
@@ -418,7 +423,7 @@ export default function MarketDetailPage({ params }: { params: { id: string } })
               <div className="mt-6 rounded-2xl border border-amber-500/25 bg-amber-500/5 p-6">
                 <h3 className="flex items-center gap-2.5 font-display font-semibold text-white">
                   <Brain className="h-5 w-5 text-amber-300" />
-                  Why the AI decided this
+                  {market.outcome === "void" ? "Why the AI found this inconclusive" : "Why the AI decided this"}
                 </h3>
                 <p className="mt-3 leading-relaxed text-zinc-300">
                   {market.verdict_note}
@@ -435,7 +440,7 @@ export default function MarketDetailPage({ params }: { params: { id: string } })
                 You&apos;re hosting this one
               </h2>
               <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-zinc-400">
-                Since you control the evidence URL, the contract locks you out
+                Since you control the evidence sources, the contract locks you out
                 of taking a side here.
               </p>
             </div>

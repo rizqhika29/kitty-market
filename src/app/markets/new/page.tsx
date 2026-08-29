@@ -11,6 +11,8 @@ import {
   Link2,
   Loader2,
   MessageSquareText,
+  Plus,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { marketContract, short, toWei, writer } from "@/lib/gl";
@@ -23,18 +25,40 @@ export default function NewMarketPage() {
 
   const [question, setQuestion] = useState("");
   const [topic, setTopic] = useState<string>("crypto");
-  const [sourceUrl, setSourceUrl] = useState("");
+  const [sourceUrls, setSourceUrls] = useState([""]);
   const [closesAt, setClosesAt] = useState("");
   const [minWager, setMinWager] = useState("0.001");
   const [maxWager, setMaxWager] = useState("500");
   const [busy, setBusy] = useState(false);
 
+  function addUrlField() {
+    if (sourceUrls.length < 5) setSourceUrls([...sourceUrls, ""]);
+  }
+
+  function removeUrlField(idx: number) {
+    if (sourceUrls.length <= 1) return;
+    setSourceUrls(sourceUrls.filter((_, i) => i !== idx));
+  }
+
+  function updateUrl(idx: number, val: string) {
+    const next = [...sourceUrls];
+    next[idx] = val;
+    setSourceUrls(next);
+  }
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
 
-    if (!question.trim() || !sourceUrl.trim() || !closesAt) {
-      toast.error("Question, source URL and close date are required");
+    const validUrls = sourceUrls.map((u) => u.trim()).filter(Boolean);
+    if (!question.trim() || validUrls.length === 0 || !closesAt) {
+      toast.error("Question, at least one source URL, and close date are required");
       return;
+    }
+    for (const u of validUrls) {
+      if (!u.startsWith("http://") && !u.startsWith("https://")) {
+        toast.error("All source URLs must start with http:// or https://");
+        return;
+      }
     }
     const min = parseFloat(minWager || "0");
     const max = parseFloat(maxWager || "0");
@@ -63,6 +87,7 @@ export default function NewMarketPage() {
       }
 
       const ts = Math.floor(new Date(closesAt).getTime() / 1000);
+      const urlsJoined = validUrls.join(", ");
 
       const txHash = await client.writeContract({
         address: contract as `0x${string}`,
@@ -70,7 +95,7 @@ export default function NewMarketPage() {
         args: [
           question.trim(),
           topic,
-          sourceUrl.trim(),
+          urlsJoined,
           BigInt(ts),
           toWei(String(min)),
           toWei(String(max)),
@@ -105,9 +130,9 @@ export default function NewMarketPage() {
           <span className="text-gradient">yes/no question</span>
         </h1>
         <p className="mx-auto mt-4 max-w-lg text-zinc-400">
-          You set the rules — evidence URL, close date, wager caps. The AI
-          validators handle the verdict; you just can&apos;t bet on your own
-          market.
+          You set the rules — evidence sources, close date, wager caps. The AI
+          validators cross-reference your sources for the verdict; you just
+          can&apos;t bet on your own market.
         </p>
       </div>
 
@@ -147,17 +172,50 @@ export default function NewMarketPage() {
           </div>
         </Field>
 
-        {/* Source */}
-        <Field icon={Link2} label="Evidence URL" tint="text-emerald-300 bg-emerald-500/15">
-          <input
-            type="url"
-            value={sourceUrl}
-            onChange={(e) => setSourceUrl(e.target.value)}
-            placeholder="https://www.coingecko.com/en/coins/bitcoin"
-            required
-            className="input-field"
-          />
-          <Hint>Validators will read this page after close to decide</Hint>
+        {/* Source URLs */}
+        <Field icon={Link2} label="Evidence URLs (1–5)" tint="text-emerald-300 bg-emerald-500/15">
+          <div className="space-y-3">
+            {sourceUrls.map((url, idx) => (
+              <div key={idx} className="flex gap-2">
+                <input
+                  type="url"
+                  value={url}
+                  onChange={(e) => updateUrl(idx, e.target.value)}
+                  placeholder={
+                    idx === 0
+                      ? "https://www.coingecko.com/en/coins/bitcoin"
+                      : `Additional source ${idx + 1} (optional)`
+                  }
+                  required={idx === 0}
+                  className="input-field flex-1"
+                />
+                {sourceUrls.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => removeUrlField(idx)}
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-zinc-400 transition hover:border-red-500/40 hover:text-red-300"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+            ))}
+            {sourceUrls.length < 5 && (
+              <button
+                type="button"
+                onClick={addUrlField}
+                className="flex items-center gap-2 rounded-xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-2.5 text-xs text-zinc-500 transition hover:border-brand-500/40 hover:text-brand-300"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Add another source
+              </button>
+            )}
+          </div>
+          <Hint>
+            Multiple corroborated sources strengthen resolution. The AI
+            cross-references all pages — conflicting evidence may result in an
+            inconclusive outcome.
+          </Hint>
         </Field>
 
         {/* Deadline */}

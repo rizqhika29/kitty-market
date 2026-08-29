@@ -2,7 +2,7 @@ export interface Market {
   id: string;
   question: string;
   topic: string;
-  source_url: string;
+  source_urls: string;
   closes_at: string;
   host: string;
   min_wager: string;
@@ -15,6 +15,13 @@ export interface Market {
   yes_pool: string;
   no_pool: string;
   pool: string;
+}
+
+export function parseSourceUrls(raw: string): string[] {
+  return raw
+    .split(",")
+    .map((u) => u.trim())
+    .filter(Boolean);
 }
 
 export interface Position {
