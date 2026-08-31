@@ -193,14 +193,16 @@ def main() -> int:
     now = int(time.time())
     Q_BTC = "Does the English Wikipedia article about Bitcoin mention Satoshi Nakamoto?"
     Q_ETH = "Does the English Wikipedia article about Ethereum mention Vitalik Buterin?"
-    SRC = "https://en.wikipedia.org/wiki/Bitcoin"
+    SRC_BTC = "https://en.wikipedia.org/wiki/Bitcoin"
+    SRC_SAT = "https://en.wikipedia.org/wiki/Satoshi_Nakamoto"
     SRC_ETH = "https://en.wikipedia.org/wiki/Ethereum"
+    SRC_VIT = "https://en.wikipedia.org/wiki/Vitalik_Buterin"
     CLOSE_AC = now + 360   # markets A & C close in 6 minutes
     CLOSE_B = now + 420    # market B closes in 7 minutes
 
-    write(alice, "open_market", Q_BTC, "crypto", SRC, CLOSE_AC, 0, 0)          # id 0
-    write(bob, "open_market", Q_ETH, "tech", SRC_ETH, CLOSE_B, 0, 0)           # id 1
-    write(dep, "open_market", Q_BTC, "other", SRC + ", " + SRC_ETH, CLOSE_AC, 10**16, 5 * 10**16)  # id 2 capped, multi-source
+    write(alice, "open_market", Q_BTC, "crypto", SRC_BTC + ", " + SRC_SAT, CLOSE_AC, 0, 0)       # id 0
+    write(bob, "open_market", Q_ETH, "tech", SRC_ETH + ", " + SRC_VIT, CLOSE_B, 0, 0)            # id 1
+    write(dep, "open_market", Q_BTC, "other", SRC_BTC + ", " + SRC_ETH, CLOSE_AC, 10**16, 5 * 10**16)  # id 2 capped
 
     m0 = json.loads(view("get_market", "0"))
     m1 = json.loads(view("get_market", "1"))
@@ -219,7 +221,7 @@ def main() -> int:
     report("get_total_markets", int(view("get_total_markets")) == 3, "=3")
 
     expect_revert(
-        lambda: write(dep, "open_market", "Q", "crypto", SRC, CLOSE_AC, 900, 100),
+        lambda: write(dep, "open_market", "Q", "crypto", SRC_BTC + ", " + SRC_ETH, CLOSE_AC, 900, 100),
         "min_wager cannot exceed max_wager",
         "open_market min>max guard",
     )

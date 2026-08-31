@@ -10,8 +10,8 @@ Properties under test:
   4. Fund conservation — payouts + fee + dust <= pot in every scenario.
   5. Host lockout — whoever controls the evidence URLs cannot hold positions.
   6. Wager caps — per-market min/max bounds are enforced on every position.
-  7. Multi-source — corroborated sources are cross-referenced; conflicting
-     sources yield inconclusive (voided).
+  7. Multi-source corroboration — at least 2 distinct-domain sources required,
+     cross-referenced by AI; conflicting sources yield inconclusive (voided).
 """
 
 import json
@@ -25,6 +25,11 @@ HOUR = 3600
 DAY = 24 * HOUR
 CLOSE = BASE_TS + 100 * HOUR  # ~4.2 days out
 AFTER_CLOSE = CLOSE + HOUR
+
+# Two distinct domains for corroboration requirement
+SRC1 = "https://coingecko.com/bitcoin"
+SRC2 = "https://reuters.com/markets"
+TWO_SOURCES = SRC1 + ", " + SRC2
 
 
 def iso(ts: int) -> str:
@@ -71,7 +76,7 @@ def open_market(
     host,
     closes_at=CLOSE,
     question="Will it happen?",
-    source_urls="https://coingecko.com/bitcoin",
+    source_urls=TWO_SOURCES,
     min_wager=0,
     max_wager=0,
 ):
@@ -111,17 +116,10 @@ def vault(vm, contract) -> int:
     return to_int(contract.get_fee_balance())
 
 
-def _mock_sources(vm, urls, bodies):
-    """Mock web responses for multiple source URLs."""
-    for url, body in zip(urls, bodies):
-        if isinstance(body, str):
-            body = {"status": 200, "body": body}
-        vm.mock_web(r"" + url.replace(".", r"\.").replace("/", r"\/").replace(":", r"\:"), body)
-
-
 def settle_yes(vm, contract, market_id):
     vm.value = 0
     vm.mock_web(r"coingecko\.com", {"status": 200, "body": "<html>up</html>"})
+    vm.mock_web(r"reuters\.com", {"status": 200, "body": "<html>up too</html>"})
     vm.mock_llm(r".*", json.dumps({"note": "evidence says yes", "outcome": "yes"}))
     return contract.settle_market(market_id)
 
@@ -129,6 +127,7 @@ def settle_yes(vm, contract, market_id):
 def settle_no(vm, contract, market_id):
     vm.value = 0
     vm.mock_web(r"coingecko\.com", {"status": 200, "body": "<html>x</html>"})
+    vm.mock_web(r"reuters\.com", {"status": 200, "body": "<html>x too</html>"})
     vm.mock_llm(r".*", json.dumps({"note": "evidence says no", "outcome": "no"}))
     return contract.settle_market(market_id)
 
@@ -136,6 +135,7 @@ def settle_no(vm, contract, market_id):
 def settle_garbage(vm, contract, market_id):
     vm.value = 0
     vm.mock_web(r"coingecko\.com", {"status": 200, "body": "<html>?</html>"})
+    vm.mock_web(r"reuters\.com", {"status": 200, "body": "<html>?</html>"})
     vm.mock_llm(r".*", json.dumps({"note": "unclear", "outcome": "perhaps"}))
     return contract.settle_market(market_id)
 
@@ -165,30 +165,26 @@ def test_spam_claims_never_inflate_vault(vm, contract, accounts, host):
     vm.warp(iso(AFTER_CLOSE))
     assert json.loads(settle_yes(vm, contract, mid))["outcome"] == "yes"
 
-    # Loser hammers claim_payout: no fee may ever appear.
     for _ in range(10):
         assert "no eligible winnings" in claim(vm, contract, carol, mid)
     assert vault(vm, contract) == 0
 
-    # Alice collects -> levy booked exactly once.
     res = json.loads(claim(vm, contract, alice, mid))
-    assert to_int(res["paid"]) == (40 * 196) // 100  # 78
+    assert to_int(res["paid"]) == (40 * 196) // 100
     assert vault(vm, contract) == 4
 
-    # Re-claims after collection pay nothing and add no fee.
     frozen = wallet(vm, contract, alice)
     for _ in range(10):
         assert "no eligible winnings" in claim(vm, contract, alice, mid)
     assert wallet(vm, contract, alice) == frozen
     assert vault(vm, contract) == 4
 
-    # Bob collects afterwards: still one levy total.
     res = json.loads(claim(vm, contract, bob, mid))
-    assert to_int(res["paid"]) == (60 * 196) // 100  # 117
+    assert to_int(res["paid"]) == (60 * 196) // 100
     assert vault(vm, contract) == 4
 
     paid = wallet(vm, contract, alice) + wallet(vm, contract, bob)
-    assert paid + vault(vm, contract) == 199  # 1 wei dust stays locked
+    assert paid + vault(vm, contract) == 199
     assert paid + vault(vm, contract) <= 200
 
 
@@ -206,15 +202,15 @@ def test_levy_booked_once_across_partial_claims(vm, contract, accounts, host):
     settle_yes(vm, contract, mid)
 
     res_a = json.loads(claim(vm, contract, alice, mid))
-    assert to_int(res_a["paid"]) == (40 * 98) // 100  # 39
+    assert to_int(res_a["paid"]) == (40 * 98) // 100
     assert vault(vm, contract) == 2
 
     res_b = json.loads(claim(vm, contract, bob, mid))
-    assert to_int(res_b["paid"]) == (60 * 98) // 100  # 58
-    assert vault(vm, contract) == 2  # unchanged
+    assert to_int(res_b["paid"]) == (60 * 98) // 100
+    assert vault(vm, contract) == 2
 
     paid = wallet(vm, contract, alice) + wallet(vm, contract, bob)
-    assert paid + vault(vm, contract) == 99  # 1 wei dust
+    assert paid + vault(vm, contract) == 99
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -236,12 +232,12 @@ def test_yes_outcome_conservation(vm, contract, accounts, host):
 
     res_a = json.loads(claim(vm, contract, alice, mid))
     res_b = json.loads(claim(vm, contract, bob, mid))
-    assert to_int(res_a["paid"]) == (100 * 588) // 300  # 196
-    assert to_int(res_b["paid"]) == (200 * 588) // 300  # 392
+    assert to_int(res_a["paid"]) == (100 * 588) // 300
+    assert to_int(res_b["paid"]) == (200 * 588) // 300
 
     paid = wallet(vm, contract, alice) + wallet(vm, contract, bob)
     assert vault(vm, contract) == 12
-    assert paid == 588  # exact split
+    assert paid == 588
     assert paid + vault(vm, contract) == 600
 
     assert "no eligible winnings" in claim(vm, contract, carol, mid)
@@ -262,12 +258,12 @@ def test_no_outcome_conservation(vm, contract, accounts, host):
 
     res_b = json.loads(claim(vm, contract, bob, mid))
     res_c = json.loads(claim(vm, contract, carol, mid))
-    assert to_int(res_b["paid"]) == (100 * 245) // 150  # 163
-    assert to_int(res_c["paid"]) == (50 * 245) // 150  # 81
+    assert to_int(res_b["paid"]) == (100 * 245) // 150
+    assert to_int(res_c["paid"]) == (50 * 245) // 150
 
     paid = wallet(vm, contract, bob) + wallet(vm, contract, carol)
     assert vault(vm, contract) == 5
-    assert paid == 244  # 1 wei dust
+    assert paid == 244
     assert paid + vault(vm, contract) <= 250
 
 
@@ -289,7 +285,6 @@ def test_unusable_verdict_voids_and_refunds(vm, contract, accounts, host):
     result = json.loads(settle_garbage(vm, contract, mid))
     assert result["outcome"] == "void"
 
-    # claim_payout refuses on voided markets.
     assert "voided" in claim(vm, contract, alice, mid)
 
     assert json.loads(reclaim(vm, contract, alice, mid))["returned"] == "70"
@@ -328,7 +323,7 @@ def test_verdict_without_backers_voids_market(vm, contract, accounts, host):
     stake(vm, contract, alice, mid, "no", 100)
 
     vm.warp(iso(AFTER_CLOSE))
-    settle_yes(vm, contract, mid)  # AI says yes but only NO money exists
+    settle_yes(vm, contract, mid)
 
     market = json.loads(contract.get_market(mid))
     assert market["settled"] is True
@@ -395,9 +390,9 @@ def test_full_flow_then_single_winner(vm, contract, accounts, host):
     vm.warp(iso(AFTER_CLOSE))
     settle_yes(vm, contract, mid)
 
-    assert vault(vm, contract) == 0  # nothing collected until a payout
+    assert vault(vm, contract) == 0
     res = json.loads(claim(vm, contract, alice, mid))
-    assert to_int(res["paid"]) == 196  # sole winner takes prize pool
+    assert to_int(res["paid"]) == 196
     assert vault(vm, contract) == 4
 
 
@@ -417,7 +412,7 @@ def test_no_double_payout(vm, contract, accounts, host):
     settle_yes(vm, contract, mid)
 
     res = json.loads(claim(vm, contract, alice, mid))
-    assert to_int(res["paid"]) == 98  # 100 - 2% levy
+    assert to_int(res["paid"]) == 98
 
     assert "no eligible winnings" in claim(vm, contract, alice, mid)
     assert wallet(vm, contract, alice) == 98
@@ -434,13 +429,11 @@ def test_host_locked_out_of_own_market(vm, contract, accounts, host):
     with vm.expect_revert("host cannot hold positions in own market"):
         stake(vm, contract, host, mid, "yes", 100)
 
-    # Others trade normally.
     stake(vm, contract, alice, mid, "yes", 100)
     market = json.loads(contract.get_market(mid))
     assert market["yes_pool"] == "100"
 
-    # And the host can never extract value even after settlement.
-    stake_other = None  # no second side exists; alice wins alone
+    stake_other = None
     assert stake_other is None
 
     vm.warp(iso(AFTER_CLOSE))
@@ -451,7 +444,6 @@ def test_host_locked_out_of_own_market(vm, contract, accounts, host):
 
 
 def test_host_lockout_blocks_cross_side_manipulation(vm, contract, accounts, host):
-    """Host cannot hedge both sides against an outside position."""
     alice = accounts[0]
     join(vm, contract, host, "host")
     join(vm, contract, alice, "alice")
@@ -520,7 +512,6 @@ def test_uncapped_market_accepts_any_amount(vm, contract, accounts, host):
     join(vm, contract, host, "host")
     join(vm, contract, alice, "alice")
 
-    # 0/0 => unlimited mode.
     mid = open_market(vm, contract, host, min_wager=0, max_wager=0)
 
     stake(vm, contract, alice, mid, "no", 1)
@@ -530,14 +521,13 @@ def test_uncapped_market_accepts_any_amount(vm, contract, accounts, host):
 
 
 def test_max_only_bound_still_enforces_floor_of_one(vm, contract, accounts, host):
-    """max set without min: only amount > 0 required."""
     alice = accounts[0]
     join(vm, contract, host, "host")
     join(vm, contract, alice, "alice")
 
     mid = open_market(vm, contract, host, min_wager=0, max_wager=50)
 
-    stake(vm, contract, alice, mid, "yes", 1)  # tiny but allowed
+    stake(vm, contract, alice, mid, "yes", 1)
     with vm.expect_revert("wager above market maximum"):
         stake(vm, contract, alice, mid, "yes", 51)
 
@@ -560,24 +550,24 @@ def test_open_rejects_bad_source_urls(vm, contract, accounts, host):
     join(vm, contract, host, "host")
     with vm.expect_revert("source URL must be http(s)"):
         vm.sender = host
-        contract.open_market("Q", "crypto", "ftp://example.com", CLOSE, 0, 0)
+        contract.open_market("Q", "crypto", "ftp://a.com, https://b.com", CLOSE, 0, 0)
     with vm.expect_revert("source URL must be http(s)"):
         vm.sender = host
-        contract.open_market("Q", "crypto", "javascript:alert(1)", CLOSE, 0, 0)
+        contract.open_market("Q", "crypto", "javascript:alert(1), https://b.com", CLOSE, 0, 0)
 
 
 def test_open_rejects_unknown_topic(vm, contract, accounts, host):
     join(vm, contract, host, "host")
     with vm.expect_revert("unknown topic"):
         vm.sender = host
-        contract.open_market("Q", "conspiracy", "https://example.com", CLOSE, 0, 0)
+        contract.open_market("Q", "conspiracy", TWO_SOURCES, CLOSE, 0, 0)
 
 
 def test_open_rejects_empty_question(vm, contract, accounts, host):
     join(vm, contract, host, "host")
     with vm.expect_revert("question must be 1-200 characters"):
         vm.sender = host
-        contract.open_market("", "crypto", "https://example.com", CLOSE, 0, 0)
+        contract.open_market("", "crypto", TWO_SOURCES, CLOSE, 0, 0)
 
 
 def test_open_rejects_distant_close(vm, contract, accounts, host):
@@ -585,7 +575,7 @@ def test_open_rejects_distant_close(vm, contract, accounts, host):
     with vm.expect_revert("closes_at too far ahead"):
         vm.sender = host
         contract.open_market(
-            "Q", "crypto", "https://example.com", BASE_TS + 400 * DAY, 0, 0
+            "Q", "crypto", TWO_SOURCES, BASE_TS + 400 * DAY, 0, 0
         )
 
 
@@ -596,22 +586,51 @@ def test_open_rejects_empty_source_urls(vm, contract, accounts, host):
         contract.open_market("Q", "crypto", "", CLOSE, 0, 0)
 
 
+def test_open_rejects_single_source(vm, contract, accounts, host):
+    """Corroboration requires at least 2 sources."""
+    join(vm, contract, host, "host")
+    with vm.expect_revert("provide 2-5 source URLs for corroboration"):
+        vm.sender = host
+        contract.open_market("Q", "crypto", "https://coingecko.com/bitcoin", CLOSE, 0, 0)
+
+
 def test_open_rejects_too_many_sources(vm, contract, accounts, host):
     join(vm, contract, host, "host")
-    urls = ", ".join(["https://example.com/%d" % i for i in range(6)])
-    with vm.expect_revert("provide 1-5 source URLs"):
+    urls = ", ".join(["https://example%d.com" % i for i in range(6)])
+    with vm.expect_revert("provide 2-5 source URLs for corroboration"):
         vm.sender = host
         contract.open_market("Q", "crypto", urls, CLOSE, 0, 0)
 
 
+def test_open_rejects_same_domain_sources(vm, contract, accounts, host):
+    """Sources must come from distinct domains."""
+    join(vm, contract, host, "host")
+    with vm.expect_revert("sources must come from distinct domains"):
+        vm.sender = host
+        contract.open_market(
+            "Q", "crypto",
+            "https://coingecko.com/bitcoin, https://coingecko.com/ethereum",
+            CLOSE, 0, 0,
+        )
+
+
+def test_open_rejects_www_vs_non_www_same_domain(vm, contract, accounts, host):
+    """www and non-www are the same domain."""
+    join(vm, contract, host, "host")
+    with vm.expect_revert("sources must come from distinct domains"):
+        vm.sender = host
+        contract.open_market(
+            "Q", "crypto",
+            "https://www.coingecko.com/bitcoin, https://coingecko.com/ethereum",
+            CLOSE, 0, 0,
+        )
+
+
 # ════════════════════════════════════════════════════════════════════════
-# 8. Transient-failure retryable path (staff regression requirement)
+# 8. Transient-failure retryable path
 # ════════════════════════════════════════════════════════════════════════
 
 def test_transient_failure_returns_retryable_not_void(vm, contract, accounts, host):
-    """A transient fetch/decode error must NOT permanently void the market.
-    The response should indicate retryable=True so the caller can retry
-    later without losing the funded stakes."""
     alice, bob = accounts[0], accounts[1]
     join(vm, contract, host, "host")
     join(vm, contract, alice, "alice")
@@ -624,6 +643,7 @@ def test_transient_failure_returns_retryable_not_void(vm, contract, accounts, ho
     vm.warp(iso(AFTER_CLOSE))
     vm.value = 0
     vm.mock_web(r"coingecko\.com", {"status": 200, "body": b"\xff\xfe"})
+    vm.mock_web(r"reuters\.com", {"status": 200, "body": "ok"})
     vm.mock_llm(r".*", '{"note": "ok", "outcome": "yes"}')
     result = json.loads(contract.settle_market(mid))
 
@@ -636,8 +656,6 @@ def test_transient_failure_returns_retryable_not_void(vm, contract, accounts, ho
 
 
 def test_transient_failure_preserves_market_state(vm, contract, accounts, host):
-    """After a transient failure the market stays open with all state
-    preserved — no void, no settlement, stakes intact."""
     alice = accounts[0]
     join(vm, contract, host, "host")
     join(vm, contract, alice, "alice")
@@ -647,36 +665,29 @@ def test_transient_failure_preserves_market_state(vm, contract, accounts, host):
 
     vm.warp(iso(AFTER_CLOSE))
 
-    # Transient failure — invalid bytes → decode error
     vm.value = 0
     vm.mock_web(r"coingecko\.com", {"status": 200, "body": b"\xff\xfe"})
+    vm.mock_web(r"reuters\.com", {"status": 200, "body": b"\xff\xfe"})
     vm.mock_llm(r".*", '{"note": "", "outcome": "yes"}')
     result = json.loads(contract.settle_market(mid))
 
     assert result.get("retryable") is True
     assert result.get("settled") is False
 
-    # Market completely unchanged — not voided, stakes intact
     market = json.loads(contract.get_market(mid))
     assert market["settled"] is False
     assert market["outcome"] == ""
     assert market["yes_pool"] == "100"
     assert market["pool"] == "100"
 
-    # No fee was taken
     assert vault(vm, contract) == 0
-
-    # Alice's stake is still locked
     assert wallet(vm, contract, alice) == 0
 
-    # claim_payout and reclaim_stake both reject unsettled markets
     assert "not settled" in claim(vm, contract, alice, mid)
     assert "not settled" in reclaim(vm, contract, alice, mid)
 
 
 def test_permanent_failure_voids_market(vm, contract, accounts, host):
-    """A permanent failure (garbage LLM output) should still void the
-    market so stakes become reclaimable."""
     alice = accounts[0]
     join(vm, contract, host, "host")
     join(vm, contract, alice, "alice")
@@ -696,19 +707,16 @@ def test_permanent_failure_voids_market(vm, contract, accounts, host):
 
 
 # ════════════════════════════════════════════════════════════════════════
-# 9. Multi-source + inconclusive (staff feedback #3)
+# 9. Multi-source corroboration + inconclusive
 # ════════════════════════════════════════════════════════════════════════
 
 def test_inconclusive_verdict_voids_and_refunds(vm, contract, accounts, host):
-    """When the AI returns inconclusive (sources conflict), market is voided
-    and all stakes are reclaimable — no fee taken."""
     alice, bob = accounts[0], accounts[1]
     join(vm, contract, host, "host")
     join(vm, contract, alice, "alice")
     join(vm, contract, bob, "bob")
 
-    mid = open_market(vm, contract, host,
-                       source_urls="https://coingecko.com/bitcoin, https://reuters.com/markets")
+    mid = open_market(vm, contract, host)
     stake(vm, contract, alice, mid, "yes", 60)
     stake(vm, contract, bob, mid, "no", 40)
 
@@ -722,7 +730,6 @@ def test_inconclusive_verdict_voids_and_refunds(vm, contract, accounts, host):
     assert market["outcome"] == "void"
     assert vault(vm, contract) == 0
 
-    # Both players reclaim — no winner, no fee.
     assert json.loads(reclaim(vm, contract, alice, mid))["returned"] == "60"
     assert json.loads(reclaim(vm, contract, bob, mid))["returned"] == "40"
     assert vault(vm, contract) == 0
@@ -731,19 +738,16 @@ def test_inconclusive_verdict_voids_and_refunds(vm, contract, accounts, host):
 
 
 def test_multi_source_yes_resolution(vm, contract, accounts, host):
-    """Multiple sources that all agree → clean yes resolution."""
     alice, bob = accounts[0], accounts[1]
     join(vm, contract, host, "host")
     join(vm, contract, alice, "alice")
     join(vm, contract, bob, "bob")
 
-    mid = open_market(vm, contract, host,
-                       source_urls="https://coingecko.com/bitcoin, https://reuters.com/markets")
+    mid = open_market(vm, contract, host)
     stake(vm, contract, alice, mid, "yes", 100)
     stake(vm, contract, bob, mid, "no", 50)
 
     vm.warp(iso(AFTER_CLOSE))
-    # Mock both sources
     vm.mock_web(r"coingecko\.com", {"status": 200, "body": "<html>up</html>"})
     vm.mock_web(r"reuters\.com", {"status": 200, "body": "<html>also up</html>"})
     vm.mock_llm(r".*", json.dumps({"note": "both sources agree yes", "outcome": "yes"}))
@@ -752,54 +756,28 @@ def test_multi_source_yes_resolution(vm, contract, accounts, host):
     assert result["outcome"] == "yes"
     assert result["settled"] is True
 
-    # Alice wins — fee charged once.
     # pot=150, levy=3, prize=147, winners_pot=100, alice_share=(100*147)//100=147
     res = json.loads(claim(vm, contract, alice, mid))
     assert to_int(res["paid"]) == 147
-    assert vault(vm, contract) == 3  # 2% of 150 = 3
-
-
-def test_single_source_still_works(vm, contract, accounts, host):
-    """A market with a single source URL still works fine."""
-    alice, bob = accounts[0], accounts[1]
-    join(vm, contract, host, "host")
-    join(vm, contract, alice, "alice")
-    join(vm, contract, bob, "bob")
-
-    mid = open_market(vm, contract, host,
-                       source_urls="https://coingecko.com/bitcoin")
-    stake(vm, contract, alice, mid, "yes", 80)
-    stake(vm, contract, bob, mid, "no", 20)
-
-    vm.warp(iso(AFTER_CLOSE))
-    settle_yes(vm, contract, mid)
-
-    # pot=100, levy=2, prize=98, winners_pot=80, alice_share=(80*98)//80=98
-    res = json.loads(claim(vm, contract, alice, mid))
-    assert to_int(res["paid"]) == 98
-    assert vault(vm, contract) == 2
+    assert vault(vm, contract) == 3
 
 
 def test_source_urls_persist_in_market_data(vm, contract, accounts, host):
-    """Multiple source URLs are stored and retrievable."""
     join(vm, contract, host, "host")
 
-    urls = "https://coingecko.com/bitcoin, https://reuters.com/markets, https://example.com/news"
-    mid = open_market(vm, contract, host, source_urls=urls)
+    mid = open_market(vm, contract, host)
 
     market = json.loads(contract.get_market(mid))
-    assert market["source_urls"] == urls
-    assert len(market["source_urls"].split(",")) == 3
+    assert market["source_urls"] == TWO_SOURCES
+    assert len(market["source_urls"].split(",")) == 2
 
 
 def test_host_cannot_trade_own_multi_source_market(vm, contract, accounts, host):
-    """Host lockout works with multi-source markets."""
     alice = accounts[0]
     join(vm, contract, host, "host")
     join(vm, contract, alice, "alice")
 
-    mid = open_market(vm, contract, host,
-                       source_urls="https://coingecko.com/bitcoin, https://reuters.com/markets")
+    mid = open_market(vm, contract, host)
 
     with vm.expect_revert("host cannot hold positions in own market"):
         stake(vm, contract, host, mid, "yes", 100)

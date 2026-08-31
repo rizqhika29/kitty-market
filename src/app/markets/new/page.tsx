@@ -25,7 +25,7 @@ export default function NewMarketPage() {
 
   const [question, setQuestion] = useState("");
   const [topic, setTopic] = useState<string>("crypto");
-  const [sourceUrls, setSourceUrls] = useState([""]);
+  const [sourceUrls, setSourceUrls] = useState(["", ""]);
   const [closesAt, setClosesAt] = useState("");
   const [minWager, setMinWager] = useState("0.001");
   const [maxWager, setMaxWager] = useState("500");
@@ -36,7 +36,7 @@ export default function NewMarketPage() {
   }
 
   function removeUrlField(idx: number) {
-    if (sourceUrls.length <= 1) return;
+    if (sourceUrls.length <= 2) return;
     setSourceUrls(sourceUrls.filter((_, i) => i !== idx));
   }
 
@@ -46,12 +46,21 @@ export default function NewMarketPage() {
     setSourceUrls(next);
   }
 
+  function getDomain(url: string): string {
+    try {
+      const h = new URL(url).hostname;
+      return h.replace(/^www\./, "");
+    } catch {
+      return "";
+    }
+  }
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
 
     const validUrls = sourceUrls.map((u) => u.trim()).filter(Boolean);
-    if (!question.trim() || validUrls.length === 0 || !closesAt) {
-      toast.error("Question, at least one source URL, and close date are required");
+    if (!question.trim() || validUrls.length < 2 || !closesAt) {
+      toast.error("Question, at least 2 source URLs from different domains, and close date are required");
       return;
     }
     for (const u of validUrls) {
@@ -59,6 +68,12 @@ export default function NewMarketPage() {
         toast.error("All source URLs must start with http:// or https://");
         return;
       }
+    }
+    const domains = validUrls.map(getDomain);
+    const uniqueDomains = new Set(domains);
+    if (uniqueDomains.size < validUrls.length) {
+      toast.error("Each source URL must come from a different domain");
+      return;
     }
     const min = parseFloat(minWager || "0");
     const max = parseFloat(maxWager || "0");
@@ -173,7 +188,7 @@ export default function NewMarketPage() {
         </Field>
 
         {/* Source URLs */}
-        <Field icon={Link2} label="Evidence URLs (1–5)" tint="text-emerald-300 bg-emerald-500/15">
+        <Field icon={Link2} label="Evidence URLs (2–5, must be different domains)" tint="text-emerald-300 bg-emerald-500/15">
           <div className="space-y-3">
             {sourceUrls.map((url, idx) => (
               <div key={idx} className="flex gap-2">
@@ -184,12 +199,12 @@ export default function NewMarketPage() {
                   placeholder={
                     idx === 0
                       ? "https://www.coingecko.com/en/coins/bitcoin"
-                      : `Additional source ${idx + 1} (optional)`
+                      : `Source ${idx + 1} from a different domain`
                   }
-                  required={idx === 0}
+                  required
                   className="input-field flex-1"
                 />
-                {sourceUrls.length > 1 && (
+                {sourceUrls.length > 2 && (
                   <button
                     type="button"
                     onClick={() => removeUrlField(idx)}
@@ -212,9 +227,9 @@ export default function NewMarketPage() {
             )}
           </div>
           <Hint>
-            Multiple corroborated sources strengthen resolution. The AI
-            cross-references all pages — conflicting evidence may result in an
-            inconclusive outcome.
+            At least 2 sources from different domains are required for
+            corroboration. The AI cross-references all pages — conflicting
+            evidence results in an inconclusive outcome with full stake refund.
           </Hint>
         </Field>
 
