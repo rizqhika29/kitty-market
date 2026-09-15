@@ -4,7 +4,7 @@
 
 Kitty Market is a decentralized prediction market where every verdict comes
 from **AI validators that read real web pages** — no trusted oracle, no
-middleman. Open a market on anything with corroborated sources of truth, take a
+middleman. Open a market on anything with a corroborated source of truth, take a
 side with GEN, and let consensus fetch reality.
 
 ---
@@ -13,21 +13,21 @@ side with GEN, and let consensus fetch reality.
 
 | Feature | Description |
 |---|---|
-| 🎯 **Open a market** | Any YES/NO question with 1–5 corroborated evidence URLs and close date |
+| 🎯 **Open a market** | Any YES/NO question with an evidence URL and close date |
 | 🐋 **Wager caps** | Host sets optional min/max stake per position — whales can't dominate |
 | ⚔️ **Take a side** | Back YES or NO with GEN; odds shift live |
-| 🤖 **AI settlement** | Validators independently fetch all evidence sources and cross-reference |
-| 🔍 **Multi-source** | AI cross-references multiple sources — conflicting evidence → inconclusive |
-| ↩️ **Voided ≠ frozen** | Unusable verdict or inconclusive ⇒ everyone reclaims their full stake |
+| 🤖 **AI settlement** | Validators independently fetch the evidence source and resolve |
+| ↩️ **Voided ≠ frozen** | Unusable verdict or terminal failure ⇒ everyone reclaims their full stake |
+| 🔁 **Terminal void** | After 5 failed settle attempts, market enters permanent void for full refund |
 | 🏆 **Top Cats** | Rankings by lifetime payouts and hit rate |
-| 🔐 **Host lockout** | Whoever controls the evidence sources can never hold positions |
+| 🔐 **Host lockout** | Whoever controls the evidence source can never hold positions |
 
 ## 🏗️ Architecture
 
 ```
 ┌────────────────────────────────────────────┐
-│  Next.js 14 · React 18 · TypeScript        │
-│  violet/fuchsia design system              │
+│  Next.js · React 19 · TypeScript           │
+│  Tailwind CSS · genlayer-js SDK            │
 └─────────────────┬──────────────────────────┘
                   │ genlayer-js
 ┌─────────────────▼──────────────────────────┐
@@ -53,78 +53,54 @@ Explorer: https://explorer-studio.genlayer.com/contracts/0xB4941E7F849C112aCe354
 ```
 
 To deploy your own instance, run `contracts/kitty_market.py` through
-GenLayer Studio and point `NEXT_PUBLIC_CONTRACT_ADDRESS` at it.
+GenLayer Studio and point `CONTRACT_ADDRESS` in `src/lib/session.tsx` at it.
 
 ### Write methods
 
 ```python
-join(name)                                                    # register an alias
-open_market(question, criteria, topic, source_urls, closes_at, min_wager, max_wager)
+join(alias)                                                    # register an alias
+open_market(question, topic, source_url, closes_at, min_wager, max_wager)
+                                                               # payable; create a market
 take_side(market_id, side)                    # payable; side = "yes"|"no"
 settle_market(market_id)                      # after close: AI verdict
-claim_payout(market_id)                       # winners collect pro-rata (2% levy)
+terminal_void(market_id)                      # after 5 failed settles: permanent void
+claim_payout(market_id)                       # winners collect pro-rata (1% fee)
 reclaim_stake(market_id)                      # voided markets: full refund
-cash_out(amount)                              # wallet -> your address
-collect_fees(amount)                          # owner only
+cash_out(amount)                              # withdraw GEN from contract balance
+collect_fees(amount)                          # owner only: withdraw accumulated fees
 ```
 
 ### Read methods
 
 ```python
-get_market(id)            get_market_limits(id)
-get_trader_info(addr)     get_trader_balance(addr)
+get_market(id)              get_owner()
+get_trader_info(addr)       get_fee_balance()
 get_trader_positions(addr)
-get_top_cats()            list_topics()
-get_total_markets()       get_total_wagers()    get_total_traders()
-get_fee_rate()            get_fee_balance()     get_owner()
+get_top_cats()
+get_total_markets()         get_total_wagers()    get_total_traders()
 ```
 
 ### Design notes
 
-- **Multi-source settlement**: hosts provide 2–5 corroborated evidence URLs from distinct domains.
-- **Resolution criteria**: each market binds an explicit, objective resolution criteria on-chain — the AI applies it literally.
-  The AI validator cross-references all sources before resolving.
-  Conflicting or insufficient evidence yields an inconclusive (void) result.
+- **AI settlement**: the host provides an evidence URL. AI validators independently
+  fetch the page, cross-reference it against the question, and resolve via consensus.
+  Conflicting or insufficient evidence yields a void result.
+- **Terminal void**: if settlement fails 5 times (evidence permanently inaccessible
+  or undecodable), anyone can call `terminal_void` to mark the market for full refund.
+  All participants then call `reclaim_stake` to recover 100% of their stakes.
 - **Wager caps**: pass `min_wager=0, max_wager=0` for an uncapped market.
   When `max_wager > 0`, positions must satisfy
   `(min_wager or 1) <= value <= max_wager`.
-- **Fee integrity**: the 2 % levy enters the vault once per settled market,
+- **Fee integrity**: the 1% levy enters the vault once per settled market,
   only when a real winning payout occurs. Losers spamming `claim_payout`
   cannot mint fees.
-- **Host lockout**: the market host picks the evidence URLs, so the contract
+- **Host lockout**: the market host picks the evidence URL, so the contract
   forbids them from holding any position in their own market.
-- **Void semantics**: resolver failure, unusable verdict, or inconclusive
-  result voids the market; `reclaim_stake` returns every stake at full
-  value, no fee.
-- **Transient retry**: transient fetch/decode errors (network timeout, 502/503,
-  decode failure) are retried up to 3 times before giving up. Only persistent
-  failures void the market — temporary glitches leave it unsettled for retry.
-
-## 🧪 Testing
-
-In-memory direct-mode tests via `genlayer-test` (Python 3.12+):
-
-```bash
-pip install -r requirements.txt
-pytest tests/ -v
-```
-
-Covers: fee-once integrity, lifecycle enforcement, void/refund paths,
-fund conservation across outcomes, host lockout, wager-cap enforcement,
-input validation, transient-failure retryable path, and multi-source
-inconclusive resolution (36 tests).
-
-Lint the contract:
-
-```bash
-genvm-lint check contracts/kitty_market.py
-```
 
 ## 🚀 Frontend
 
 ```bash
 npm install
-cp .env.example .env      # paste deployed contract address
 npm run dev               # http://localhost:3000
 ```
 
@@ -146,34 +122,34 @@ kitty-market/
 ├── contracts/
 │   └── kitty_market.py          # GenLayer Intelligent Contract
 ├── tests/
-│   ├── conftest.py              # Windows gltest direct-mode fix
-│   └── test_kitty_market.py     # property-based test suite
+│   └── test_terminal_void.py    # Terminal void refund path tests
+├── scripts/
+│   └── test-final-v2.js         # Deploy + full method test suite
 ├── src/
 │   ├── app/
-│   │   ├── layout.tsx           # shell + session provider
-│   │   ├── page.tsx             # landing
+│   │   ├── layout.tsx           # Shell + session provider
+│   │   ├── page.tsx             # Landing
+│   │   ├── globals.css          # Tailwind base styles
 │   │   ├── markets/
-│   │   │   ├── page.tsx         # browse + filters
-│   │   │   ├── new/page.tsx     # open a market (multi-URL + wager caps UI)
-│   │   │   └── [id]/page.tsx    # detail: stake / settle / claim / reclaim
+│   │   │   ├── page.tsx         # Browse + filters
+│   │   │   ├── new/page.tsx     # Open a market
+│   │   │   └── [id]/page.tsx    # Detail: stake / settle / claim / reclaim
 │   │   ├── rankings/page.tsx    # Top Cats board
-│   │   └── portfolio/page.tsx   # stats, cash-out, owner vault
+│   │   └── portfolio/page.tsx   # Stats, cash-out, owner vault
 │   ├── components/
-│   │   ├── Navbar.tsx           # floating pill nav
-│   │   ├── WalletModal.tsx      # multi-wallet picker
-│   │   ├── OnboardingDialog.tsx # alias claim
-│   │   └── MarketCard.tsx       # reusable market card
+│   │   └── Navbar.tsx           # Navigation bar
 │   └── lib/
-│       ├── gl.ts                # SDK client factory + formatters
-│       ├── session.tsx          # session context
-│       ├── wallets.ts           # injected-wallet detection
-│       └── types.ts             # shared types/helpers
-└── gltest.config.yaml
+│       └── session.tsx          # Session context + all contract interactions
+├── package.json
+├── tsconfig.json
+├── next.config.js
+├── tailwind.config.js
+└── postcss.config.js
 ```
 
 ## 📄 License
 
-MIT — see [LICENSE](./LICENSE). © 2026 Kitty Market contributors.
+MIT — © 2026 Kitty Market contributors.
 
 ---
 
