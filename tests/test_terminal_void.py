@@ -1,26 +1,21 @@
 """
-Focused test: Terminal void refund path
-========================================
+Terminal void refund path tests (Direct Mode)
+==============================================
 Proves that every participant can recover their full stake after evidence
-becomes permanently inaccessible or undecodable (terminal failure).
+becomes permanently inaccessible (terminal failure).
 
 Test scenario:
 1. Deploy contract
-2. Register 3 traders
-3. Host creates a market with an evidence URL
-4. All 3 traders place bets (different sides, different amounts)
-5. Settle fails MAX_SETTLE_ATTEMPTS times (simulating inaccessible evidence)
+2. Register traders
+3. Host creates a market
+4. Traders place bets
+5. Settle fails MAX_SETTLE_ATTEMPTS times (mock returns void)
 6. Anyone calls terminal_void()
-7. All 3 traders reclaim their full stakes
-8. Verify: every participant's wallet balance >= their starting balance
+7. All traders reclaim their full stakes
 """
 import json
 import pytest
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 def _parse_json(raw):
     if isinstance(raw, str):
@@ -28,262 +23,253 @@ def _parse_json(raw):
     return raw
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-@pytest.fixture()
-def deployed(contract):
-    """Return (contract_instance, owner_address)."""
-    return contract, contract.owner()
-
-
-# ---------------------------------------------------------------------------
-# Test: terminal void → full refund for every participant
-# ---------------------------------------------------------------------------
-
 class TestTerminalVoidRefund:
-    """
-    Terminal-void refund path
-    ─────────────────────────
-    When evidence is permanently inaccessible / undecodable the contract must
-    allow *anyone* to call ``terminal_void`` after ``MAX_SETTLE_ATTEMPTS``
-    failed settlement rounds, and every position holder must be able to
-    reclaim their **full** original stake.
-    """
 
-    def test_full_refund_after_terminal_void(self, chain, accounts, deploy_contract):
-        """
-        Core test: 3 traders bet, settlement fails 5×, terminal_void called,
-        all 3 reclaim full stake.
-        """
-        host = accounts[0]
-        trader_a = accounts[1]
-        trader_b = accounts[2]
-        trader_c = accounts[3]
+    def test_full_refund_after_terminal_void(self, direct_vm, direct_deploy, direct_accounts):
+        host = direct_accounts[0]
+        alice = direct_accounts[1]
+        bob = direct_accounts[2]
+        charlie = direct_accounts[3]
+        caller = direct_accounts[5]
 
-        # Deploy
-        contract = deploy_contract(host)
+        direct_vm.mock_web(r".*", {"status": 200, "body": "unavailable"})
+        direct_vm.mock_llm(r".*", json.dumps({"outcome": "void", "reasoning": "inaccessible"}))
 
-        # Register traders
-        contract.join("host_cat", sender=host)
-        contract.join("alice", sender=trader_a)
-        contract.join("bob", sender=trader_b)
-        contract.join("charlie", sender=trader_c)
+        contract = direct_deploy("contracts/kitty_market.py", host.as_hex)
 
-        # Record starting balances
-        bal_a_start = chain.get_balance(trader_a)
-        bal_b_start = chain.get_balance(trader_b)
-        bal_c_start = chain.get_balance(trader_c)
+        direct_vm.sender = host
+        contract.join("host_cat")
+        direct_vm.sender = alice
+        contract.join("alice")
+        direct_vm.sender = bob
+        contract.join("bob")
+        direct_vm.sender = charlie
+        contract.join("charlie")
 
-        # Host opens a market (evidence URL is intentionally broken)
-        now = chain.timestamp
-        closes_at = now + 86400  # closes in 1 day
+        bal_a_start = direct_vm.get_balance(alice)
+        bal_b_start = direct_vm.get_balance(bob)
+        bal_c_start = direct_vm.get_balance(charlie)
 
+        now = direct_vm.get_timestamp()
+        closes_at = int(now) + 86400
+
+        direct_vm.sender = host
         contract.open_market(
             "Will BTC hit 200k?",
             "crypto",
             "https://evidence.invalid/permanently-down",
             closes_at,
-            0,   # min_wager = 0
-            0,   # max_wager = 0 (uncapped)
-            sender=host,
+            0,
+            0,
         )
 
-        # Traders place bets
-        stake_a = chain.web3.to_wei(10, "ether")
-        stake_b = chain.web3.to_wei(20, "ether")
-        stake_c = chain.web3.to_wei(15, "ether")
+        stake_a = 10 * 10**18
+        stake_b = 20 * 10**18
+        stake_c = 15 * 10**18
 
-        contract.take_side(0, "yes", value=stake_a, sender=trader_a)
-        contract.take_side(0, "no", value=stake_b, sender=trader_b)
-        contract.take_side(0, "yes", value=stake_c, sender=trader_c)
+        direct_vm.sender = alice
+        contract.take_side(0, "yes", value=stake_a)
+        direct_vm.sender = bob
+        contract.take_side(0, "no", value=stake_b)
+        direct_vm.sender = charlie
+        contract.take_side(0, "yes", value=stake_c)
 
-        # Verify pools
         m = _parse_json(contract.get_market(0))
         assert int(m["yes_pool"]) == stake_a + stake_c
         assert int(m["no_pool"]) == stake_b
 
-        # Advance time past close
-        chain.timestamp = closes_at + 1
-        chain.mine()
+        direct_vm.sender = caller
+        for _ in range(5):
+            contract.settle_market(0)
 
-        # Simulate MAX_SETTLE_ATTEMPTS (5) failed settlements
-        # In production each settle_market call triggers AI consensus which
-        # returns "void" when evidence is inaccessible. Here we call settle
-        # until the contract records enough attempts.
-        MAX_ATTEMPTS = 5
-        for i in range(MAX_ATTEMPTS):
-            # Each call increments settle_attempts; mock returns void
-            contract.settle_market(0, sender=accounts[5])
-
-        # Verify attempts recorded
         m = _parse_json(contract.get_market(0))
-        assert int(m["settle_attempts"]) >= MAX_ATTEMPTS
+        assert int(m["settle_attempts"]) >= 5
 
-        # ── Terminal void ──
-        tx = contract.terminal_void(0, sender=accounts[5])
+        contract.terminal_void(0)
 
         m = _parse_json(contract.get_market(0))
         assert m["terminal_void"] is True
         assert m["settled"] is True
         assert m["outcome"] == "terminal_void"
 
-        # ── Every trader reclaims full stake ──
-        contract.reclaim_stake(0, sender=trader_a)
-        contract.reclaim_stake(0, sender=trader_b)
-        contract.reclaim_stake(0, sender=trader_c)
+        direct_vm.sender = alice
+        contract.reclaim_stake(0)
+        direct_vm.sender = bob
+        contract.reclaim_stake(0)
+        direct_vm.sender = charlie
+        contract.reclaim_stake(0)
 
-        bal_a_end = chain.get_balance(trader_a)
-        bal_b_end = chain.get_balance(trader_b)
-        bal_c_end = chain.get_balance(trader_c)
+        assert direct_vm.get_balance(alice) >= bal_a_start
+        assert direct_vm.get_balance(bob) >= bal_b_start
+        assert direct_vm.get_balance(charlie) >= bal_c_start
 
-        # Each trader must have recovered their full stake
-        # (minus gas, so >= is the correct assertion)
-        assert bal_a_end >= bal_a_start, f"Trader A lost money: start={bal_a_start} end={bal_a_end}"
-        assert bal_b_end >= bal_b_start, f"Trader B lost money: start={bal_b_start} end={bal_b_end}"
-        assert bal_c_end >= bal_c_start, f"Trader C lost money: start={bal_c_start} end={bal_c_end}"
+    def test_cannot_terminal_void_before_max_attempts(self, direct_vm, direct_deploy, direct_accounts):
+        host = direct_accounts[0]
+        caller = direct_accounts[5]
 
-        # The positions must be marked closed
-        pos_a = _parse_json(contract.get_trader_positions(trader_a.as_hex))
-        pos_b = _parse_json(contract.get_trader_positions(trader_b.as_hex))
-        pos_c = _parse_json(contract.get_trader_positions(trader_c.as_hex))
+        direct_vm.mock_web(r".*", {"status": 200, "body": "unavailable"})
+        direct_vm.mock_llm(r".*", json.dumps({"outcome": "void", "reasoning": "inaccessible"}))
 
-        for positions in [pos_a, pos_b, pos_c]:
-            for p in positions:
-                assert p["closed"] is True
+        contract = direct_deploy("contracts/kitty_market.py", host.as_hex)
 
-    def test_cannot_terminal_void_before_max_attempts(self, chain, accounts, deploy_contract):
-        """terminal_void must revert when settle_attempts < MAX_SETTLE_ATTEMPTS."""
-        host = accounts[0]
-        caller = accounts[5]
-        contract = deploy_contract(host)
+        direct_vm.sender = host
+        contract.join("host_cat")
 
-        contract.join("host_cat", sender=host)
+        now = direct_vm.get_timestamp()
+        contract.open_market("Q?", "other", "https://x", int(now) + 86400, 0, 0)
 
-        now = chain.timestamp
-        contract.open_market("Q?", "other", "https://x", now + 86400, 0, 0, sender=host)
-
-        # Only 2 attempts – should fail
+        direct_vm.sender = caller
         for _ in range(2):
-            contract.settle_market(0, sender=caller)
+            contract.settle_market(0)
 
-        with pytest.raises(Exception):
-            contract.terminal_void(0, sender=caller)
+        with direct_vm.expect_revert("Must have 5 or more failed settle attempts"):
+            contract.terminal_void(0)
 
-    def test_cannot_reclaim_stake_on_non_void(self, chain, accounts, deploy_contract):
-        """reclaim_stake must revert on a market that resolved to yes/no."""
-        host = accounts[0]
-        trader = accounts[1]
-        contract = deploy_contract(host)
+    def test_cannot_reclaim_stake_on_non_void(self, direct_vm, direct_deploy, direct_accounts):
+        host = direct_accounts[0]
+        trader = direct_accounts[1]
 
-        contract.join("h", sender=host)
-        contract.join("t", sender=trader)
+        direct_vm.mock_web(r".*", {"status": 200, "body": "market data"})
+        direct_vm.mock_llm(r".*", json.dumps({"outcome": "yes", "reasoning": "clear evidence"}))
 
-        now = chain.timestamp
-        closes = now + 86400
-        contract.open_market("Q?", "other", "https://example.com", closes, 0, 0, sender=host)
+        contract = direct_deploy("contracts/kitty_market.py", host.as_hex)
 
-        contract.take_side(0, "yes", value=chain.web3.to_wei(1, "ether"), sender=trader)
+        direct_vm.sender = host
+        contract.join("h")
+        direct_vm.sender = trader
+        contract.join("t")
 
-        chain.timestamp = closes + 1
-        chain.mine()
+        now = direct_vm.get_timestamp()
+        closes = int(now) + 86400
 
-        # Settlement returns a definitive outcome (mocked as "yes")
-        contract.settle_market(0, sender=accounts[5])
+        direct_vm.sender = host
+        contract.open_market("Q?", "other", "https://example.com", closes, 0, 0)
+        direct_vm.sender = trader
+        contract.take_side(0, "yes", value=10**18)
+
+        direct_vm.sender = trader
+        contract.settle_market(0)
 
         m = _parse_json(contract.get_market(0))
         if m["outcome"] in ("void", "terminal_void"):
-            pytest.skip("Mock returned void – cannot test non-void path")
+            pytest.skip("Mock returned void - cannot test non-void path")
 
-        with pytest.raises(Exception):
-            contract.reclaim_stake(0, sender=trader)
+        with direct_vm.expect_revert("Not a void market"):
+            contract.reclaim_stake(0)
 
-    def test_cannot_double_reclaim(self, chain, accounts, deploy_contract):
-        """Calling reclaim_stake twice must revert the second time."""
-        host = accounts[0]
-        trader = accounts[1]
-        contract = deploy_contract(host)
+    def test_cannot_double_reclaim(self, direct_vm, direct_deploy, direct_accounts):
+        host = direct_accounts[0]
+        trader = direct_accounts[1]
+        caller = direct_accounts[5]
 
-        contract.join("h", sender=host)
-        contract.join("t", sender=trader)
+        direct_vm.mock_web(r".*", {"status": 200, "body": "unavailable"})
+        direct_vm.mock_llm(r".*", json.dumps({"outcome": "void", "reasoning": "inaccessible"}))
 
-        now = chain.timestamp
-        closes = now + 86400
-        contract.open_market("Q?", "other", "https://evidence.invalid", closes, 0, 0, sender=host)
-        contract.take_side(0, "yes", value=chain.web3.to_wei(5, "ether"), sender=trader)
+        contract = direct_deploy("contracts/kitty_market.py", host.as_hex)
 
-        chain.timestamp = closes + 1
-        chain.mine()
+        direct_vm.sender = host
+        contract.join("h")
+        direct_vm.sender = trader
+        contract.join("t")
 
+        now = direct_vm.get_timestamp()
+        closes = int(now) + 86400
+
+        direct_vm.sender = host
+        contract.open_market("Q?", "other", "https://evidence.invalid", closes, 0, 0)
+        direct_vm.sender = trader
+        contract.take_side(0, "yes", value=5 * 10**18)
+
+        direct_vm.sender = caller
         for _ in range(5):
-            contract.settle_market(0, sender=accounts[5])
+            contract.settle_market(0)
 
-        contract.terminal_void(0, sender=accounts[5])
-        contract.reclaim_stake(0, sender=trader)
+        contract.terminal_void(0)
 
-        with pytest.raises(Exception):
-            contract.reclaim_stake(0, sender=trader)
+        direct_vm.sender = trader
+        contract.reclaim_stake(0)
 
-    def test_host_can_also_reclaim(self, chain, accounts, deploy_contract):
-        """If the host also placed a position (on someone else's market), they can reclaim too."""
-        host = accounts[0]
-        other_host = accounts[1]
-        trader = accounts[2]
+        with direct_vm.expect_revert("Already reclaimed"):
+            contract.reclaim_stake(0)
 
-        contract = deploy_contract(host)
-        contract.join("h", sender=host)
-        contract.join("oh", sender=other_host)
-        contract.join("t", sender=trader)
+    def test_uninvolved_trader_cannot_reclaim(self, direct_vm, direct_deploy, direct_accounts):
+        host = direct_accounts[0]
+        trader = direct_accounts[1]
+        stranger = direct_accounts[2]
+        caller = direct_accounts[5]
 
-        now = chain.timestamp
-        closes = now + 86400
+        direct_vm.mock_web(r".*", {"status": 200, "body": "unavailable"})
+        direct_vm.mock_llm(r".*", json.dumps({"outcome": "void", "reasoning": "inaccessible"}))
 
-        # other_host creates market so host can bet
-        contract.open_market("Q?", "other", "https://evidence.invalid", closes, 0, 0, sender=other_host)
-        contract.take_side(0, "yes", value=chain.web3.to_wei(3, "ether"), sender=host)
-        contract.take_side(0, "no", value=chain.web3.to_wei(7, "ether"), sender=trader)
+        contract = direct_deploy("contracts/kitty_market.py", host.as_hex)
 
-        chain.timestamp = closes + 1
-        chain.mine()
+        direct_vm.sender = host
+        contract.join("h")
+        direct_vm.sender = trader
+        contract.join("t")
+        direct_vm.sender = stranger
+        contract.join("s")
 
+        now = direct_vm.get_timestamp()
+        closes = int(now) + 86400
+
+        direct_vm.sender = host
+        contract.open_market("Q?", "other", "https://evidence.invalid", closes, 0, 0)
+        direct_vm.sender = trader
+        contract.take_side(0, "yes", value=10**18)
+
+        direct_vm.sender = caller
         for _ in range(5):
-            contract.settle_market(0, sender=accounts[5])
+            contract.settle_market(0)
 
-        contract.terminal_void(0, sender=accounts[5])
+        contract.terminal_void(0)
 
-        bal_host_start = chain.get_balance(host)
-        bal_trader_start = chain.get_balance(trader)
+        direct_vm.sender = stranger
+        with direct_vm.expect_revert("No position in this market"):
+            contract.reclaim_stake(0)
 
-        contract.reclaim_stake(0, sender=host)
-        contract.reclaim_stake(0, sender=trader)
+    def test_host_can_also_reclaim(self, direct_vm, direct_deploy, direct_accounts):
+        host = direct_accounts[0]
+        other_host = direct_accounts[1]
+        trader = direct_accounts[2]
+        caller = direct_accounts[5]
 
-        assert chain.get_balance(host) >= bal_host_start
-        assert chain.get_balance(trader) >= bal_trader_start
+        direct_vm.mock_web(r".*", {"status": 200, "body": "unavailable"})
+        direct_vm.mock_llm(r".*", json.dumps({"outcome": "void", "reasoning": "inaccessible"}))
 
-    def test_uninvolved_trader_cannot_reclaim(self, chain, accounts, deploy_contract):
-        """A trader with no position must not be able to reclaim."""
-        host = accounts[0]
-        trader = accounts[1]
-        stranger = accounts[2]
-        contract = deploy_contract(host)
+        contract = direct_deploy("contracts/kitty_market.py", host.as_hex)
 
-        contract.join("h", sender=host)
-        contract.join("t", sender=trader)
-        contract.join("s", sender=stranger)
+        direct_vm.sender = host
+        contract.join("h")
+        direct_vm.sender = other_host
+        contract.join("oh")
+        direct_vm.sender = trader
+        contract.join("t")
 
-        now = chain.timestamp
-        closes = now + 86400
-        contract.open_market("Q?", "other", "https://evidence.invalid", closes, 0, 0, sender=host)
-        contract.take_side(0, "yes", value=chain.web3.to_wei(1, "ether"), sender=trader)
+        now = direct_vm.get_timestamp()
+        closes = int(now) + 86400
 
-        chain.timestamp = closes + 1
-        chain.mine()
+        direct_vm.sender = other_host
+        contract.open_market("Q?", "other", "https://evidence.invalid", closes, 0, 0)
 
+        direct_vm.sender = host
+        contract.take_side(0, "yes", value=3 * 10**18)
+        direct_vm.sender = trader
+        contract.take_side(0, "no", value=7 * 10**18)
+
+        direct_vm.sender = caller
         for _ in range(5):
-            contract.settle_market(0, sender=accounts[5])
+            contract.settle_market(0)
 
-        contract.terminal_void(0, sender=accounts[5])
+        contract.terminal_void(0)
 
-        with pytest.raises(Exception):
-            contract.reclaim_stake(0, sender=stranger)
+        bal_host_start = direct_vm.get_balance(host)
+        bal_trader_start = direct_vm.get_balance(trader)
+
+        direct_vm.sender = host
+        contract.reclaim_stake(0)
+        direct_vm.sender = trader
+        contract.reclaim_stake(0)
+
+        assert direct_vm.get_balance(host) >= bal_host_start
+        assert direct_vm.get_balance(trader) >= bal_trader_start

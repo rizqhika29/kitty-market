@@ -209,7 +209,8 @@ class KittyMarket(gl.Contract):
             outcome = "void"
             reasoning = "Settlement failed or timed out"
 
-        self.markets[idx].resolved = True
+        if outcome in ("yes", "no"):
+            self.markets[idx].resolved = True
         self.markets[idx].outcome = outcome
         self.markets[idx].reasoning = reasoning
 
