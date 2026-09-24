@@ -13,7 +13,7 @@ import { type Address, formatEther, parseEther } from "viem";
 import { createClient } from "genlayer-js";
 import { studionet } from "genlayer-js/chains";
 
-const CONTRACT_ADDRESS = "0x79e4B28A91277841aC8a3e1Da9204feb564081EF";
+const CONTRACT_ADDRESS = "0xE7E27Bed763325214932946A63DcDbD7097957fa";
 
 interface Session {
   address: Address | null;

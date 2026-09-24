@@ -175,8 +175,11 @@ class KittyMarket(gl.Contract):
         self.markets[idx].settle_attempts = market.settle_attempts + u64(1)
 
         def leader_fn():
-            web = gl.nondet.web.get(market.resolution_url)
-            content = web.body.decode("utf-8", errors="ignore")[:8000]
+            try:
+                web = gl.nondet.web.get(market.resolution_url)
+                content = web.body.decode("utf-8", errors="ignore")[:8000]
+            except Exception:
+                return {"outcome": "void", "reasoning": "Evidence URL inaccessible"}
 
             prompt = (
                 f"You are resolving a prediction market.\n\n"
@@ -188,8 +191,11 @@ class KittyMarket(gl.Contract):
                 f'reply with {{"outcome": "void", "reasoning": "explanation"}}'
             )
 
-            resp = gl.nondet.exec_prompt(prompt, response_format="json")
-            return resp
+            try:
+                resp = gl.nondet.exec_prompt(prompt, response_format="json")
+                return resp
+            except Exception:
+                return {"outcome": "void", "reasoning": "LLM call failed"}
 
         def validator_fn(leader_result) -> bool:
             if not isinstance(leader_result, gl.vm.Return):
