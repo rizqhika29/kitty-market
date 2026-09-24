@@ -17,6 +17,14 @@ import json
 import pytest
 
 
+def _to_hex(addr):
+    if isinstance(addr, bytes):
+        return "0x" + addr.hex()
+    if hasattr(addr, "as_hex"):
+        return addr.as_hex
+    return str(addr)
+
+
 def _parse_json(raw):
     if isinstance(raw, str):
         return json.loads(raw)
@@ -35,7 +43,7 @@ class TestTerminalVoidRefund:
         direct_vm.mock_web(r".*", {"status": 200, "body": "unavailable"})
         direct_vm.mock_llm(r".*", json.dumps({"outcome": "void", "reasoning": "inaccessible"}))
 
-        contract = direct_deploy("contracts/kitty_market.py", host.as_hex)
+        contract = direct_deploy("contracts/kitty_market.py", _to_hex(host))
 
         direct_vm.sender = host
         contract.join("host_cat")
@@ -110,7 +118,7 @@ class TestTerminalVoidRefund:
         direct_vm.mock_web(r".*", {"status": 200, "body": "unavailable"})
         direct_vm.mock_llm(r".*", json.dumps({"outcome": "void", "reasoning": "inaccessible"}))
 
-        contract = direct_deploy("contracts/kitty_market.py", host.as_hex)
+        contract = direct_deploy("contracts/kitty_market.py", _to_hex(host))
 
         direct_vm.sender = host
         contract.join("host_cat")
@@ -132,7 +140,7 @@ class TestTerminalVoidRefund:
         direct_vm.mock_web(r".*", {"status": 200, "body": "market data"})
         direct_vm.mock_llm(r".*", json.dumps({"outcome": "yes", "reasoning": "clear evidence"}))
 
-        contract = direct_deploy("contracts/kitty_market.py", host.as_hex)
+        contract = direct_deploy("contracts/kitty_market.py", _to_hex(host))
 
         direct_vm.sender = host
         contract.join("h")
@@ -165,7 +173,7 @@ class TestTerminalVoidRefund:
         direct_vm.mock_web(r".*", {"status": 200, "body": "unavailable"})
         direct_vm.mock_llm(r".*", json.dumps({"outcome": "void", "reasoning": "inaccessible"}))
 
-        contract = direct_deploy("contracts/kitty_market.py", host.as_hex)
+        contract = direct_deploy("contracts/kitty_market.py", _to_hex(host))
 
         direct_vm.sender = host
         contract.join("h")
@@ -201,7 +209,7 @@ class TestTerminalVoidRefund:
         direct_vm.mock_web(r".*", {"status": 200, "body": "unavailable"})
         direct_vm.mock_llm(r".*", json.dumps({"outcome": "void", "reasoning": "inaccessible"}))
 
-        contract = direct_deploy("contracts/kitty_market.py", host.as_hex)
+        contract = direct_deploy("contracts/kitty_market.py", _to_hex(host))
 
         direct_vm.sender = host
         contract.join("h")
@@ -237,7 +245,7 @@ class TestTerminalVoidRefund:
         direct_vm.mock_web(r".*", {"status": 200, "body": "unavailable"})
         direct_vm.mock_llm(r".*", json.dumps({"outcome": "void", "reasoning": "inaccessible"}))
 
-        contract = direct_deploy("contracts/kitty_market.py", host.as_hex)
+        contract = direct_deploy("contracts/kitty_market.py", _to_hex(host))
 
         direct_vm.sender = host
         contract.join("h")
