@@ -43,7 +43,11 @@ class Trader:
     total_calls: u64
 
 
-MAX_SETTLE_ATTEMPTS: u64 = 5
+MAX_SETTLE_ATTEMPTS = u64(5)
+
+
+def _addr(a: Address) -> str:
+    return a.as_hex.lower()
 
 
 class KittyMarket(gl.Contract):
@@ -56,7 +60,7 @@ class KittyMarket(gl.Contract):
     fee_rate: u256
 
     def __init__(self, owner: str):
-        self.owner = owner
+        self.owner = owner.lower()
         self.total_wagers = u256(0)
         self.fee_balance = u256(0)
         self.fee_rate = u256(100)  # 1% fee (basis points / 100)
@@ -64,9 +68,8 @@ class KittyMarket(gl.Contract):
     @gl.public.write
     def join(self, alias: str) -> str:
         sender = gl.message.sender_address
-        key = sender.as_hex
-        if key in self.traders:
-            return json.dumps({"error": "already joined"})
+        key = _addr(sender)
+        assert key not in self.traders, "Already joined"
         self.traders[key] = Trader(
             alias=alias,
             joined_at=u64(int(datetime.now(timezone.utc).timestamp())),
@@ -74,7 +77,7 @@ class KittyMarket(gl.Contract):
             correct_calls=u64(0),
             total_calls=u64(0),
         )
-        return json.dumps({"alias": alias, "address": sender.as_hex})
+        return json.dumps({"alias": alias, "address": _addr(sender)})
 
     @gl.public.write.payable
     def open_market(
@@ -143,11 +146,11 @@ class KittyMarket(gl.Contract):
 
         assert amount > u256(0), "Must wager something"
 
-        pos_key = f"{hex(int(market_id))}:{sender.as_hex}"
+        pos_key = f"{hex(int(market_id))}:{_addr(sender)}"
         if pos_key in self.positions:
             existing = self.positions[pos_key]
             assert existing.side == side, "Already on the other side"
-            existing.size = existing.size + amount
+            existing.size = u256(existing.size + amount)
         else:
             self.positions[pos_key] = Position(
                 market_id=market_id,
@@ -157,11 +160,11 @@ class KittyMarket(gl.Contract):
             )
 
         if side == "yes":
-            self.markets[idx].yes_pool = market.yes_pool + amount
+            self.markets[idx].yes_pool = u256(market.yes_pool + amount)
         else:
-            self.markets[idx].no_pool = market.no_pool + amount
+            self.markets[idx].no_pool = u256(market.no_pool + amount)
 
-        self.total_wagers = self.total_wagers + amount
+        self.total_wagers = u256(self.total_wagers + amount)
         return "ok"
 
     @gl.public.write
@@ -172,12 +175,13 @@ class KittyMarket(gl.Contract):
         assert not market.resolved, "Already resolved"
         assert not market.terminal_void, "Market is terminal void"
 
-        self.markets[idx].settle_attempts = market.settle_attempts + u64(1)
+        self.markets[idx].settle_attempts = u64(market.settle_attempts + u64(1))
 
-        def leader_fn():
+        def leader_fn() -> dict:
             try:
                 web = gl.nondet.web.get(market.resolution_url)
-                content = web.body.decode("utf-8", errors="ignore")[:8000]
+                body = web.body if web.body is not None else b""
+                content = body.decode("utf-8", errors="ignore")[:8000]
             except Exception:
                 return {"outcome": "void", "reasoning": "Evidence URL inaccessible"}
 
@@ -208,12 +212,15 @@ class KittyMarket(gl.Contract):
 
         result = gl.vm.run_nondet_unsafe(leader_fn, validator_fn)
 
-        if isinstance(result, gl.vm.Return):
-            outcome = result.calldata.get("outcome", "void")
-            reasoning = result.calldata.get("reasoning", "")
+        if isinstance(result, dict):
+            outcome = str(result.get("outcome", "void"))
+            reasoning = str(result.get("reasoning", ""))
         else:
             outcome = "void"
             reasoning = "Settlement failed or timed out"
+
+        if outcome not in ("yes", "no", "void"):
+            outcome = "void"
 
         if outcome in ("yes", "no"):
             self.markets[idx].resolved = True
@@ -253,7 +260,7 @@ class KittyMarket(gl.Contract):
         assert market.outcome in ("void", "terminal_void"), "Not a void market"
 
         sender = gl.message.sender_address
-        pos_key = f"{hex(int(market_id))}:{sender.as_hex}"
+        pos_key = f"{hex(int(market_id))}:{_addr(sender)}"
         assert pos_key in self.positions, "No position in this market"
 
         pos = self.positions[pos_key]
@@ -278,7 +285,7 @@ class KittyMarket(gl.Contract):
         assert market.outcome not in ("void", "terminal_void"), "Void market"
 
         sender = gl.message.sender_address
-        pos_key = f"{hex(int(market_id))}:{sender.as_hex}"
+        pos_key = f"{hex(int(market_id))}:{_addr(sender)}"
         assert pos_key in self.positions, "No position"
 
         pos = self.positions[pos_key]
@@ -286,9 +293,9 @@ class KittyMarket(gl.Contract):
         assert pos.side == market.outcome, "Wrong side"
 
         total_pool = market.yes_pool + market.no_pool
-        fee = total_pool * self.fee_rate / u256(10000)
+        fee = total_pool * self.fee_rate // u256(10000)
         distributable = total_pool - fee
-        self.fee_balance = self.fee_balance + fee
+        self.fee_balance = u256(self.fee_balance + fee)
 
         if pos.side == "yes":
             share = pos.size * distributable // market.yes_pool if market.yes_pool > u256(0) else u256(0)
@@ -298,16 +305,16 @@ class KittyMarket(gl.Contract):
         pos.closed = True
         self.positions[pos_key] = pos
 
-        trader_key = sender.as_hex
+        trader_key = _addr(sender)
         if trader_key in self.traders:
             trader = self.traders[trader_key]
-            trader.earnings = trader.earnings + share
-            trader.correct_calls = trader.correct_calls + u64(1)
-            trader.total_calls = trader.total_calls + u64(1)
+            trader.earnings = u256(trader.earnings + share)
+            trader.correct_calls = u64(trader.correct_calls + u64(1))
+            trader.total_calls = u64(trader.total_calls + u64(1))
             self.traders[trader_key] = trader
 
         receiver = gl.get_contract_at(sender)
-        receiver.emit_transfer(value=share, on='accepted')
+        receiver.emit_transfer(value=u256(share), on='accepted')
 
         return json.dumps({"payout": str(share)})
 
@@ -321,9 +328,9 @@ class KittyMarket(gl.Contract):
 
     @gl.public.write
     def collect_fees(self, amount: u256):
-        assert gl.message.sender_address.as_hex == self.owner, "Only owner"
+        assert _addr(gl.message.sender_address) == self.owner, "Only owner"
         assert self.fee_balance >= amount, "Insufficient fee balance"
-        self.fee_balance = self.fee_balance - amount
+        self.fee_balance = u256(self.fee_balance - amount)
         receiver = gl.get_contract_at(gl.message.sender_address)
         receiver.emit_transfer(value=amount, on='accepted')
 
@@ -337,7 +344,7 @@ class KittyMarket(gl.Contract):
             "question": m.question,
             "topic": m.topic,
             "source_url": m.resolution_url,
-            "host": m.creator.as_hex,
+            "host": _addr(m.creator),
             "closes_at": str(m.deadline),
             "min_wager": str(m.min_wager),
             "max_wager": str(m.max_wager),
@@ -365,8 +372,9 @@ class KittyMarket(gl.Contract):
 
     @gl.public.view
     def get_trader_info(self, address: str) -> str:
-        if address in self.traders:
-            t = self.traders[address]
+        key = address.lower()
+        if key in self.traders:
+            t = self.traders[key]
             return json.dumps({
                 "alias": t.alias,
                 "joined_at": str(t.joined_at),
@@ -377,9 +385,10 @@ class KittyMarket(gl.Contract):
 
     @gl.public.view
     def get_trader_positions(self, address: str) -> str:
+        needle = address.lower()
         result = []
         for key, pos in self.positions.items():
-            if address in key:
+            if needle in key.lower():
                 result.append({
                     "market_id": str(pos.market_id),
                     "side": pos.side,

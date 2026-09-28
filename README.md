@@ -46,10 +46,10 @@ side with GEN, and let consensus fetch reality.
 **Live on Studionet:**
 
 ```
-Address : 0xE7E27Bed763325214932946A63DcDbD7097957fa
+Address : 0x58A7A2ef380d741D6C534b4B520a158A8fAf7Ca5
 Network : GenLayer Studionet (Chain ID 61999)
 RPC     : https://studio.genlayer.com/api
-Explorer: https://explorer-studio.genlayer.com/contracts/0xE7E27Bed763325214932946A63DcDbD7097957fa
+Explorer: https://explorer-studio.genlayer.com/contracts/0x58A7A2ef380d741D6C534b4B520a158A8fAf7Ca5
 ```
 
 To deploy your own instance, run `contracts/kitty_market.py` through
@@ -104,6 +104,25 @@ npm install
 npm run dev               # http://localhost:3000
 ```
 
+## ✅ Tests & linting
+
+```bash
+pip install -r requirements.txt
+python -m pytest tests/ -v          # Direct Mode unit tests (no Studio needed)
+
+pip install genvm-linter
+genvm-lint check contracts/kitty_market.py   # fast AST safety checks
+genvm-lint typecheck contracts/kitty_market.py
+```
+
+On-chain end-to-end suite (deploys a fresh instance to Studionet, then exercises
+every write path including the 5-attempt terminal-void refund):
+
+```bash
+node scripts/deploy-and-test-full.js   # deploy + full flow proof
+node scripts/full-test.js              # 35 assertions vs deployed address
+```
+
 Add GenLayer Studionet to MetaMask:
 
 | Field | Value |
@@ -122,9 +141,12 @@ kitty-market/
 ├── contracts/
 │   └── kitty_market.py          # GenLayer Intelligent Contract
 ├── tests/
-│   └── test_terminal_void.py    # Terminal void refund path tests
+│   ├── test_terminal_void.py    # Terminal void refund path tests
+│   └── test_payouts.py          # Settlement / claim / fee collection tests
 ├── scripts/
-│   └── test-final-v2.js         # Deploy + full method test suite
+│   ├── deploy.js                # Deploy to Studionet
+│   ├── deploy-and-test-full.js  # Deploy + terminal void end-to-end proof
+│   └── full-test.js             # 35-assertion method suite
 ├── src/
 │   ├── app/
 │   │   ├── layout.tsx           # Shell + session provider
@@ -140,6 +162,8 @@ kitty-market/
 │   │   └── Navbar.tsx           # Navigation bar
 │   └── lib/
 │       └── session.tsx          # Session context + all contract interactions
+├── requirements.txt             # Python test dependencies
+├── gltest.config.yaml           # genlayer-test configuration
 ├── package.json
 ├── tsconfig.json
 ├── next.config.js

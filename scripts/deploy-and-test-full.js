@@ -240,8 +240,8 @@ async function main() {
 
   // ── CASH OUT (fee test) ──
   console.log("\n=== CASH OUT ===");
-  r = await sendTx("cash_out", client, "cash_out", [BigInt(0)]);
-  r.pass ? ok("cash_out") : nok("cash_out", r.error);
+  r = await sendTx("cash_out(0)", client, "cash_out", [BigInt(0)]);
+  r.pass ? nok("cash_out(0)", "should have been rejected") : ok("cash_out(0) rejected");
 
   // ── READ top cats ──
   console.log("\n=== READ top cats ===");
