@@ -46,8 +46,21 @@ class Trader:
 MAX_SETTLE_ATTEMPTS = u64(5)
 
 
+@gl.evm.contract_interface
+class _EoaRecipient:
+    class View:
+        pass
+
+    class Write:
+        pass
+
+
 def _addr(a: Address) -> str:
     return a.as_hex.lower()
+
+
+def _send_eoa(to: Address, value: u256) -> None:
+    _EoaRecipient(to).emit_transfer(value=value)
 
 
 class KittyMarket(gl.Contract):
@@ -271,8 +284,7 @@ class KittyMarket(gl.Contract):
         pos.closed = True
         self.positions[pos_key] = pos
 
-        receiver = gl.get_contract_at(sender)
-        receiver.emit_transfer(value=refund, on='accepted')
+        _send_eoa(sender, refund)
 
         return json.dumps({"refunded": str(refund)})
 
@@ -313,8 +325,7 @@ class KittyMarket(gl.Contract):
             trader.total_calls = u64(trader.total_calls + u64(1))
             self.traders[trader_key] = trader
 
-        receiver = gl.get_contract_at(sender)
-        receiver.emit_transfer(value=u256(share), on='accepted')
+        _send_eoa(sender, u256(share))
 
         return json.dumps({"payout": str(share)})
 
@@ -323,16 +334,14 @@ class KittyMarket(gl.Contract):
         assert amount > u256(0), "Amount must be greater than 0"
         sender = gl.message.sender_address
         assert self.balance >= amount, "Insufficient balance"
-        receiver = gl.get_contract_at(sender)
-        receiver.emit_transfer(value=amount, on='accepted')
+        _send_eoa(sender, amount)
 
     @gl.public.write
     def collect_fees(self, amount: u256):
         assert _addr(gl.message.sender_address) == self.owner, "Only owner"
         assert self.fee_balance >= amount, "Insufficient fee balance"
         self.fee_balance = u256(self.fee_balance - amount)
-        receiver = gl.get_contract_at(gl.message.sender_address)
-        receiver.emit_transfer(value=amount, on='accepted')
+        _send_eoa(gl.message.sender_address, amount)
 
     @gl.public.view
     def get_market(self, market_id: u256) -> str:
