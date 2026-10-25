@@ -22,6 +22,8 @@ class Market:
     reasoning: str
     settle_attempts: u64
     terminal_void: bool
+    fee_accrued: u256
+    payout_pool: u256
 
 
 @allow_storage
@@ -71,12 +73,14 @@ class KittyMarket(gl.Contract):
     total_wagers: u256
     fee_balance: u256
     fee_rate: u256
+    liability: u256
 
     def __init__(self, owner: str):
         self.owner = owner.lower()
         self.total_wagers = u256(0)
         self.fee_balance = u256(0)
         self.fee_rate = u256(100)  # 1% fee (basis points / 100)
+        self.liability = u256(0)   # outstanding refunds + unpaid winner payouts
 
     @gl.public.write
     def join(self, alias: str) -> str:
@@ -130,6 +134,8 @@ class KittyMarket(gl.Contract):
                 reasoning="",
                 settle_attempts=u64(0),
                 terminal_void=False,
+                fee_accrued=u256(0),
+                payout_pool=u256(0),
             )
         )
         return market_id
@@ -151,24 +157,34 @@ class KittyMarket(gl.Contract):
 
         assert sender != market.creator, "Host cannot bet on own market"
 
-        if market.max_wager > 0:
-            assert amount >= market.min_wager, "Below minimum wager"
-            assert amount <= market.max_wager, "Above maximum wager"
-        elif market.min_wager > 0:
-            assert amount >= market.min_wager, "Below minimum wager"
-
-        assert amount > u256(0), "Must wager something"
-
         pos_key = f"{hex(int(market_id))}:{_addr(sender)}"
+        existing_size = u256(0)
         if pos_key in self.positions:
             existing = self.positions[pos_key]
             assert existing.side == side, "Already on the other side"
-            existing.size = u256(existing.size + amount)
+            assert not existing.closed, "Position already closed"
+            existing_size = existing.size
+
+        new_size = u256(existing_size + amount)
+
+        # The advertised minimum applies per deposit; the maximum applies to
+        # the trader's cumulative exposure in this market, not to one top-up.
+        if market.min_wager > 0:
+            assert amount >= market.min_wager, "Below minimum wager"
+        if market.max_wager > 0:
+            assert new_size <= market.max_wager, "Above maximum wager"
+
+        assert amount > u256(0), "Must wager something"
+
+        if pos_key in self.positions:
+            existing = self.positions[pos_key]
+            existing.size = new_size
+            self.positions[pos_key] = existing
         else:
             self.positions[pos_key] = Position(
                 market_id=market_id,
                 side=side,
-                size=amount,
+                size=new_size,
                 closed=False,
             )
 
@@ -178,6 +194,7 @@ class KittyMarket(gl.Contract):
             self.markets[idx].no_pool = u256(market.no_pool + amount)
 
         self.total_wagers = u256(self.total_wagers + amount)
+        self.liability = u256(self.liability + amount)
         return "ok"
 
     @gl.public.write
@@ -188,7 +205,11 @@ class KittyMarket(gl.Contract):
         assert not market.resolved, "Already resolved"
         assert not market.terminal_void, "Market is terminal void"
 
-        self.markets[idx].settle_attempts = u64(market.settle_attempts + u64(1))
+        # Resolution may only begin after the advertised close time. This also
+        # guarantees a failed-attempt counter can never be built up before the
+        # market is actually closed.
+        now = u64(int(datetime.now(timezone.utc).timestamp()))
+        assert now >= market.deadline, "Market has not closed yet"
 
         def leader_fn() -> dict:
             try:
@@ -223,7 +244,10 @@ class KittyMarket(gl.Contract):
             except Exception:
                 return False
 
-        result = gl.vm.run_nondet_unsafe(leader_fn, validator_fn)
+        try:
+            result = gl.vm.run_nondet_unsafe(leader_fn, validator_fn)
+        except Exception:
+            result = {"outcome": "void", "reasoning": "Settlement failed or timed out"}
 
         if isinstance(result, dict):
             outcome = str(result.get("outcome", "void"))
@@ -236,9 +260,42 @@ class KittyMarket(gl.Contract):
             outcome = "void"
 
         if outcome in ("yes", "no"):
-            self.markets[idx].resolved = True
+            winning_pool = market.yes_pool if outcome == "yes" else market.no_pool
+            if winning_pool == u256(0):
+                # No one backed the winning side. There is no correct claimant,
+                # so the only fund-safe policy is a full refund of every stake.
+                outcome = "void"
+                reasoning = (
+                    f"{reasoning} No winning positions existed, so the market "
+                    f"is void and all stakes are refundable."
+                )
+                self.markets[idx].resolved = True
+                self.markets[idx].outcome = outcome
+                self.markets[idx].reasoning = reasoning
+                return json.dumps({"outcome": outcome, "reasoning": reasoning})
+            else:
+                total_pool = u256(market.yes_pool + market.no_pool)
+                fee = u256(total_pool * self.fee_rate // u256(10000))
+                distributable = u256(total_pool - fee)
+
+                # The fee is accrued exactly once, here at settlement. Claims
+                # only move already-reserved participant funds.
+                self.markets[idx].resolved = True
+                self.markets[idx].fee_accrued = fee
+                self.markets[idx].payout_pool = distributable
+                self.markets[idx].outcome = outcome
+                self.markets[idx].reasoning = reasoning
+                self.fee_balance = u256(self.fee_balance + fee)
+                self.liability = u256(self.liability - fee)
+                return json.dumps({"outcome": outcome, "reasoning": reasoning})
+
+        # Only failed attempts are counted. Successful resolutions and
+        # zero-winner markets return above; a void attempt leaves the market
+        # unresolved so owners can retry or eventually terminal-void it.
+        self.markets[idx].settle_attempts = u64(market.settle_attempts + u64(1))
         self.markets[idx].outcome = outcome
         self.markets[idx].reasoning = reasoning
+        self.markets[idx].resolved = False
 
         return json.dumps({"outcome": outcome, "reasoning": reasoning})
 
@@ -249,6 +306,9 @@ class KittyMarket(gl.Contract):
         market = self.markets[idx]
         assert not market.resolved, "Already resolved"
         assert not market.terminal_void, "Already terminal void"
+
+        now = u64(int(datetime.now(timezone.utc).timestamp()))
+        assert now >= market.deadline, "Market has not closed yet"
         assert market.settle_attempts >= MAX_SETTLE_ATTEMPTS, (
             f"Must have {MAX_SETTLE_ATTEMPTS} or more failed settle attempts"
         )
@@ -283,6 +343,7 @@ class KittyMarket(gl.Contract):
         refund = pos.size
         pos.closed = True
         self.positions[pos_key] = pos
+        self.liability = u256(self.liability - refund)
 
         _send_eoa(sender, refund)
 
@@ -304,18 +365,19 @@ class KittyMarket(gl.Contract):
         assert not pos.closed, "Already claimed"
         assert pos.side == market.outcome, "Wrong side"
 
-        total_pool = market.yes_pool + market.no_pool
-        fee = total_pool * self.fee_rate // u256(10000)
-        distributable = total_pool - fee
-        self.fee_balance = u256(self.fee_balance + fee)
+        # The fee was reserved once at settlement. Claims must never touch
+        # fee_balance; they only release the pre-computed participant pool.
+        distributable = market.payout_pool
+        winning_pool = market.yes_pool if pos.side == "yes" else market.no_pool
 
-        if pos.side == "yes":
-            share = pos.size * distributable // market.yes_pool if market.yes_pool > u256(0) else u256(0)
+        if winning_pool > u256(0):
+            share = u256(pos.size * distributable // winning_pool)
         else:
-            share = pos.size * distributable // market.no_pool if market.no_pool > u256(0) else u256(0)
+            share = u256(0)
 
         pos.closed = True
         self.positions[pos_key] = pos
+        self.liability = u256(self.liability - share)
 
         trader_key = _addr(sender)
         if trader_key in self.traders:
@@ -330,16 +392,15 @@ class KittyMarket(gl.Contract):
         return json.dumps({"payout": str(share)})
 
     @gl.public.write
-    def cash_out(self, amount: u256):
-        assert amount > u256(0), "Amount must be greater than 0"
-        sender = gl.message.sender_address
-        assert self.balance >= amount, "Insufficient balance"
-        _send_eoa(sender, amount)
-
-    @gl.public.write
     def collect_fees(self, amount: u256):
         assert _addr(gl.message.sender_address) == self.owner, "Only owner"
+        assert amount > u256(0), "Amount must be greater than 0"
         assert self.fee_balance >= amount, "Insufficient fee balance"
+        # Owner withdrawals can only consume the fee vault. Participant
+        # reserves must remain fully covered after the transfer.
+        assert self.balance >= u256(self.liability + amount), (
+            "Withdrawal would reduce participant reserves"
+        )
         self.fee_balance = u256(self.fee_balance - amount)
         _send_eoa(gl.message.sender_address, amount)
 
@@ -365,6 +426,13 @@ class KittyMarket(gl.Contract):
             "verdict_note": m.reasoning,
             "settle_attempts": str(m.settle_attempts),
             "terminal_void": m.terminal_void,
+            "fee_accrued": str(m.fee_accrued),
+            "payout_pool": str(m.payout_pool),
+            "winning_pool": str(
+                m.yes_pool if m.outcome == "yes"
+                else m.no_pool if m.outcome == "no"
+                else u256(0)
+            ),
         })
 
     @gl.public.view
@@ -427,3 +495,20 @@ class KittyMarket(gl.Contract):
     @gl.public.view
     def get_fee_balance(self) -> u256:
         return self.fee_balance
+
+    @gl.public.view
+    def get_liability(self) -> u256:
+        return self.liability
+
+    @gl.public.view
+    def get_accounting(self) -> str:
+        balance = int(self.balance)
+        liability = int(self.liability)
+        fees = int(self.fee_balance)
+        return json.dumps({
+            "contract_balance": str(balance),
+            "liability": str(liability),
+            "fee_balance": str(fees),
+            "surplus": str(balance - liability - fees),
+            "solvent": balance >= liability + fees,
+        })

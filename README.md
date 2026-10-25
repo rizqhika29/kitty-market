@@ -46,10 +46,10 @@ side with GEN, and let consensus fetch reality.
 **Live on Studionet:**
 
 ```
-Address : 0xfc1fE5aA35Cc943E62aE555d8E0F922796b03b7F
+Address : 0xF1c2F3c96d33413D8ca8cFfDe0fe8cE6A3ae95e7
 Network : GenLayer Studionet (Chain ID 61999)
 RPC     : https://studio.genlayer.com/api
-Explorer: https://explorer-studio.genlayer.com/contracts/0xfc1fE5aA35Cc943E62aE555d8E0F922796b03b7F
+Explorer: https://explorer-studio.genlayer.com/contracts/0xF1c2F3c96d33413D8ca8cFfDe0fe8cE6A3ae95e7
 ```
 
 To deploy your own instance, run `contracts/kitty_market.py` through
@@ -66,17 +66,20 @@ settle_market(market_id)                      # after close: AI verdict
 terminal_void(market_id)                      # after 5 failed settles: permanent void
 claim_payout(market_id)                       # winners collect pro-rata (1% fee)
 reclaim_stake(market_id)                      # voided markets: full refund
-cash_out(amount)                              # withdraw GEN from contract balance
 collect_fees(amount)                          # owner only: withdraw accumulated fees
 ```
+
+The unsafe balance-based `cash_out()` method has been removed. Participants
+receive funds only through `claim_payout()` (their winning entitlement) or
+`reclaim_stake()` (their own refund). The owner can withdraw only accrued fees.
 
 ### Read methods
 
 ```python
 get_market(id)              get_owner()
 get_trader_info(addr)       get_fee_balance()
-get_trader_positions(addr)
-get_top_cats()
+get_trader_positions(addr)  get_liability()
+get_top_cats()              get_accounting()
 get_total_markets()         get_total_wagers()    get_total_traders()
 ```
 
@@ -85,17 +88,38 @@ get_total_markets()         get_total_wagers()    get_total_traders()
 - **AI settlement**: the host provides an evidence URL. AI validators independently
   fetch the page, cross-reference it against the question, and resolve via consensus.
   Conflicting or insufficient evidence yields a void result.
+- **Close-time enforcement**: `settle_market` and `terminal_void` reject any call
+  before `closes_at`. Settlement attempts are incremented only after a failed
+  (void) resolution, so the terminal-void counter can never be built up early.
 - **Terminal void**: if settlement fails 5 times (evidence permanently inaccessible
   or undecodable), anyone can call `terminal_void` to mark the market for full refund.
   All participants then call `reclaim_stake` to recover 100% of their stakes.
 - **Wager caps**: pass `min_wager=0, max_wager=0` for an uncapped market.
-  When `max_wager > 0`, positions must satisfy
-  `(min_wager or 1) <= value <= max_wager`.
-- **Fee integrity**: the 1% levy enters the vault once per settled market,
-  only when a real winning payout occurs. Losers spamming `claim_payout`
-  cannot mint fees.
+  `max_wager` is enforced against a trader's **cumulative position**, not each
+  individual deposit. The minimum applies to each deposit.
+- **Zero-winner policy**: if the AI resolves a side that has no positions, the
+  market settles as `void` with no fee so every stake is refundable.
+- **Fee integrity**: the 1% levy is accrued exactly once, at settlement, into a
+  dedicated `fee_balance`. Claims only release the pre-computed `payout_pool`;
+  `collect_fees` is owner-only and refuses transfers that would leave the
+  contract below outstanding participant liabilities.
+- **Liability accounting**: `liability` tracks every outstanding refund and
+  unpaid winning payout. `get_accounting()` exposes contract balance, liability,
+  fee vault, surplus, and a `solvent` flag.
 - **Host lockout**: the market host picks the evidence URL, so the contract
   forbids them from holding any position in their own market.
+
+## 🔐 Steward review fixes
+
+| Issue | Resolution |
+|---|---|
+| Unauthorized `cash_out()` | Method removed entirely; funds leave only via `claim_payout()` / `reclaim_stake()` / owner-only `collect_fees()`. |
+| Fee inflated per winning claim | Fee is computed and accrued exactly once at settlement; `claim_payout()` only releases `payout_pool`. |
+| Fee withdrawal could touch reserves | `collect_fees()` is capped by `fee_balance` and checks `balance >= liability + amount`. |
+| Premature settlement | `settle_market()` requires `now >= deadline`; failed-attempt counter increments only after a void resolution. |
+| Premature terminal void | `terminal_void()` requires the close time plus 5 counted failed attempts. |
+| Wager cap bypass via top-ups | `max_wager` is enforced against the cumulative position (`existing + new`). |
+| No policy for zero winning positions | Such markets resolve as `void` with zero fee, making every stake refundable. |
 
 ## 🚀 Frontend
 
@@ -108,20 +132,47 @@ npm run dev               # http://localhost:3000
 
 ```bash
 pip install -r requirements.txt
-python -m pytest tests/ -v          # Direct Mode unit tests (no Studio needed)
+python -m pytest tests/ -v          # 17 Direct Mode tests (no Studio needed)
 
 pip install genvm-linter
 genvm-lint check contracts/kitty_market.py   # fast AST safety checks
 genvm-lint typecheck contracts/kitty_market.py
 ```
 
-On-chain end-to-end suite (deploys a fresh instance to Studionet, then exercises
-every write path including the 5-attempt terminal-void refund):
+The direct suite covers unauthorized withdrawals, multiple winning claims,
+fee accounting, premature settlement, repeated/terminal settlement attempts,
+cumulative wager caps, zero-winning-position voids, and liability coverage
+throughout every payout and refund flow.
+
+### Studionet proof
+
+`scripts/verify-fixes.js` deploys no extra state and exercises the already
+deployed corrected contract:
 
 ```bash
-node scripts/deploy-and-test-full.js   # deploy + full flow proof
-node scripts/full-test.js              # 35 assertions vs deployed address
+node scripts/deploy.js         # deploy a fresh instance + update config
+node scripts/verify-fixes.js   # full on-chain flow, writes tx references
 ```
+
+Latest run: **0 failures**, contract
+`0xF1c2F3c96d33413D8ca8cFfDe0fe8cE6A3ae95e7`. Full hashes are in
+[`scripts/studionet-verification.json`](scripts/studionet-verification.json).
+
+| Step | Studionet transaction |
+|---|---|
+| Create payout market | `0x5bb4dc6ab876b758c26ad09215e85347bcc7b4d55cf43ff7bf0ab65d2d210577` |
+| Stake 3 GEN YES | `0x567c2a1220f3dbe84b33ef90d6c1a0170998a9dc29b8145117e69d15536f618c` |
+| Stake 1 GEN NO | `0xab260623f8f6f358f46b8248cde23dd4d5da4c2541e75b5fe2355c766d7cb175` |
+| Premature settle rejected | `0x81087bcf57f5e3401db821e31dc3da29d5a1319093131e329d90d8251b0dfaba` |
+| AI settlement (YES) | `0x84c5509d7da6ecb21d3b095ff4aecca9c5f6f646361d67967c14c7235ea3bdec` |
+| Winning payout claimed | `0xc60dc2c1b53fd9ea6b87275f4749a94a418e73a1f9a4130408afad427588a3fa` |
+| Fee collected by owner | `0xaec75df121037ad84d3b3161f56ba7e1d0ea374f877aec85d800c4060207c917` |
+| Zero-winner market created | `0x398f17d30e2e677cf7811af365966dfd771837f041511eddf804995a34827eb4` |
+| AI settlement -> void | `0x65f44970d821f73a8d1d9d016da46b44f3e5d635df0fcf406b8895d75fc2c4db` |
+| Void refund reclaimed | `0x2d73ff5bfc87943a0244a8ec3a9b3ce33110d0f95e3bd5a1871699ea9cc5d64b` |
+
+Explorer:
+`https://explorer-studio.genlayer.com/contracts/0xF1c2F3c96d33413D8ca8cFfDe0fe8cE6A3ae95e7`
 
 Add GenLayer Studionet to MetaMask:
 
@@ -141,12 +192,16 @@ kitty-market/
 ├── contracts/
 │   └── kitty_market.py          # GenLayer Intelligent Contract
 ├── tests/
+│   ├── conftest.py              # Shared Direct Mode env + liability ledger
 │   ├── test_terminal_void.py    # Terminal void refund path tests
-│   └── test_payouts.py          # Settlement / claim / fee collection tests
+│   ├── test_payouts.py          # Settlement / claim / fee collection tests
+│   └── test_lifecycle_safety.py # Deadline, attempts, caps, invariants
 ├── scripts/
 │   ├── deploy.js                # Deploy to Studionet
-│   ├── deploy-and-test-full.js  # Deploy + terminal void end-to-end proof
-│   └── full-test.js             # 35-assertion method suite
+│   ├── verify-fixes.js          # Full corrected-contract Studionet proof
+│   ├── studionet-verification.json # Recorded tx references
+│   ├── deploy-and-test-full.js  # Legacy deploy + terminal void proof
+│   └── full-test.js             # Legacy 35-assertion method suite
 ├── src/
 │   ├── app/
 │   │   ├── layout.tsx           # Shell + session provider
@@ -157,7 +212,7 @@ kitty-market/
 │   │   │   ├── new/page.tsx     # Open a market
 │   │   │   └── [id]/page.tsx    # Detail: stake / settle / claim / reclaim
 │   │   ├── rankings/page.tsx    # Top Cats board
-│   │   └── portfolio/page.tsx   # Stats, cash-out, owner vault
+│   │   └── portfolio/page.tsx   # Stats, positions, owner fee vault
 │   ├── components/
 │   │   └── Navbar.tsx           # Navigation bar
 │   └── lib/

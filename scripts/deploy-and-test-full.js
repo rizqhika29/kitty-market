@@ -11,6 +11,15 @@ function skip(name, reason) { results.push({ name, pass: "skip", reason }); cons
 
 async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+async function waitUntil(ts) {
+  const target = Number(ts) * 1000 + 5000;
+  while (Date.now() < target) {
+    const left = Math.ceil((target - Date.now()) / 1000);
+    console.log(`  waiting for close time... ${left}s`);
+    await sleep(Math.min(left * 1000, 15000));
+  }
+}
+
 async function sendTx(label, c, fn, args, value) {
   try {
     const h = await c.writeContract({ address: CONTRACT, functionName: fn, args, value: value || BigInt(0) });
@@ -154,8 +163,9 @@ async function main() {
   // ── OPEN MARKET (invalid URL to force void) ──
   console.log("\n=== OPEN MARKET ===");
   const now = Math.floor(Date.now() / 1000);
+  const closesAt = now + 180;
   r = await sendTx("open_market", client2, "open_market", [
-    "Will BTC hit 200k?", "crypto", "https://invalid.evidence.test/down", BigInt(now + 3600), BigInt(0), BigInt(0),
+    "Will BTC hit 200k?", "crypto", "https://invalid.evidence.test/down", BigInt(closesAt), BigInt(0), BigInt(0),
   ]);
   r.pass ? ok("open_market") : nok("open_market", r.error);
 
@@ -190,6 +200,7 @@ async function main() {
 
   // ── SETTLE 5 TIMES (void) ──
   console.log("\n=== SETTLE 5 TIMES ===");
+  await waitUntil(closesAt);
   for (let i = 1; i <= 5; i++) {
     r = await sendTx(`settle_market #${i}`, client, "settle_market", [0n]);
     r.pass ? ok(`settle #${i}`) : nok(`settle #${i}`, r.error);
@@ -238,10 +249,10 @@ async function main() {
   r = await sendTx("reclaim bettor", client3, "reclaim_stake", [0n]);
   r.pass ? ok("reclaim bettor") : nok("reclaim bettor", r.error);
 
-  // ── CASH OUT (fee test) ──
-  console.log("\n=== CASH OUT ===");
+  // ── CASH OUT MUST NOT EXIST ──
+  console.log("\n=== CASH OUT REMOVED ===");
   r = await sendTx("cash_out(0)", client, "cash_out", [BigInt(0)]);
-  r.pass ? nok("cash_out(0)", "should have been rejected") : ok("cash_out(0) rejected");
+  r.pass ? nok("cash_out removed", "unsafe method still callable") : ok("cash_out removed");
 
   // ── READ top cats ──
   console.log("\n=== READ top cats ===");

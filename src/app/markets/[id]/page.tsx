@@ -185,6 +185,8 @@ export default function MarketDetailPage() {
     address && market.host?.toLowerCase() === address.toLowerCase();
   const isOpen =
     !market.settled && !market.terminal_void && Date.now() / 1000 < Number(market.closes_at);
+  const isClosed =
+    !market.settled && !market.terminal_void && Date.now() / 1000 >= Number(market.closes_at);
   const isSettled = market.settled;
   const isTerminalVoid = market.terminal_void || market.outcome === "terminal_void";
   const isVoid = market.outcome === "void" || isTerminalVoid;
@@ -387,7 +389,7 @@ export default function MarketDetailPage() {
           )}
 
           {/* Settle */}
-          {isOpen && !isHost && (
+          {isClosed && (
             <button
               onClick={handleSettle}
               disabled={submitting}

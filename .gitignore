@@ -7,3 +7,4 @@ __pycache__/
 .pytest_cache/
 artifacts/
 tsconfig.tsbuildinfo
+next-env.d.ts

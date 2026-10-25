@@ -17,13 +17,11 @@ export default function PortfolioPage() {
     getTraderInfo,
     getTraderPositions,
     getMarket,
-    cashOut,
     collectFees,
   } = useSession();
 
   const [positions, setPositions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [cashOutAmount, setCashOutAmount] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   const isOwner =
@@ -49,23 +47,6 @@ export default function PortfolioPage() {
     }
     load();
   }, [address, getTraderPositions, getMarket]);
-
-  const handleCashOut = async () => {
-    if (!cashOutAmount || parseFloat(cashOutAmount) <= 0) {
-      toast.error("Enter a valid amount");
-      return;
-    }
-    setSubmitting(true);
-    try {
-      await cashOut(cashOutAmount);
-      toast.success("Cashed out!");
-      setCashOutAmount("");
-    } catch (e: any) {
-      toast.error(e?.message || "Cash out failed");
-    } finally {
-      setSubmitting(false);
-    }
-  };
 
   const handleCollectFees = async () => {
     setSubmitting(true);
@@ -129,24 +110,13 @@ export default function PortfolioPage() {
           </div>
         </div>
 
-        {/* Cash out */}
-        <div className="mt-4 flex gap-2">
-          <input
-            type="number"
-            placeholder="Amount (GEN)"
-            value={cashOutAmount}
-            onChange={(e) => setCashOutAmount(e.target.value)}
-            className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white placeholder:text-white/30 focus:outline-none focus:border-purple-500"
-            min="0"
-            step="0.01"
-          />
-          <button
-            onClick={handleCashOut}
-            disabled={submitting || !cashOutAmount}
-            className="px-6 py-3 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white rounded-xl font-bold transition-all"
-          >
-            Cash Out
-          </button>
+        {/* Payouts are released per market by claim_payout / reclaim_stake. */}
+        <div className="mt-4 p-3 bg-white/5 rounded-xl border border-white/10">
+          <p className="text-xs text-white/40">
+            Winnings and void refunds are released per market. Open a market and
+            use Claim Payout or Reclaim Full Stake — the contract never allows a
+            balance-based withdrawal.
+          </p>
         </div>
       </div>
 

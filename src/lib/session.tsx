@@ -13,7 +13,7 @@ import { type Address, formatEther, parseEther } from "viem";
 import { createClient } from "genlayer-js";
 import { studionet } from "genlayer-js/chains";
 
-const CONTRACT_ADDRESS = "0xfc1fE5aA35Cc943E62aE555d8E0F922796b03b7F";
+const CONTRACT_ADDRESS = "0xF1c2F3c96d33413D8ca8cFfDe0fe8cE6A3ae95e7";
 
 interface Session {
   address: Address | null;
@@ -42,7 +42,6 @@ interface Session {
   terminalVoid: (marketId: string) => Promise<void>;
   claimPayout: (marketId: string) => Promise<void>;
   reclaimStake: (marketId: string) => Promise<void>;
-  cashOut: (amount: string) => Promise<void>;
   collectFees: (amount: string) => Promise<void>;
   getMarket: (marketId: string) => Promise<any>;
   getTraderInfo: (address: string) => Promise<any>;
@@ -275,20 +274,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     [client, address]
   );
 
-  const cashOut = useCallback(
-    async (amount: string) => {
-      if (!address) throw new Error("Not connected");
-      const hash = await client.writeContract({
-        address: CONTRACT_ADDRESS,
-        functionName: "cash_out",
-        args: [parseEther(amount)],
-        value: BigInt(0),
-      });
-      await client.waitForTransactionReceipt({ hash, status: "FINALIZED" as any });
-    },
-    [client, address]
-  );
-
   const collectFees = useCallback(
     async (amount: string) => {
       if (!address) throw new Error("Not connected");
@@ -371,7 +356,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         terminalVoid,
         claimPayout,
         reclaimStake,
-        cashOut,
         collectFees,
         getMarket,
         getTraderInfo,

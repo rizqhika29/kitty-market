@@ -1,0 +1,96 @@
+{
+  "contract": "0xF1c2F3c96d33413D8ca8cFfDe0fe8cE6A3ae95e7",
+  "txRefs": [
+    {
+      "label": "join creator",
+      "hash": "0xd551429cae125a1d0031e16e3738396074cc2d2b1a0cf7691e9ec89c040f0f9e",
+      "status": "finalized"
+    },
+    {
+      "label": "join yes winner",
+      "hash": "0x7d9de70708b9306e4a6d7d7e25df874d2565b16faec743a6cbbe127bcf0fe81f",
+      "status": "finalized"
+    },
+    {
+      "label": "join no loser",
+      "hash": "0x73aa27270d7dde7900c90de8204a2d025fca3c23eed621232b6259f5bf5d312b",
+      "status": "finalized"
+    },
+    {
+      "label": "join void bettor",
+      "hash": "0xe6555f1b0a69ab7e8067947860d8432bdbc7e388e30ad848f26156eab5719e9a",
+      "status": "finalized"
+    },
+    {
+      "label": "open payout market",
+      "hash": "0x5bb4dc6ab876b758c26ad09215e85347bcc7b4d55cf43ff7bf0ab65d2d210577",
+      "status": "finalized"
+    },
+    {
+      "label": "open zero-winner market",
+      "hash": "0x398f17d30e2e677cf7811af365966dfd771837f041511eddf804995a34827eb4",
+      "status": "finalized"
+    },
+    {
+      "label": "yes winner stakes 3 GEN YES",
+      "hash": "0x567c2a1220f3dbe84b33ef90d6c1a0170998a9dc29b8145117e69d15536f618c",
+      "status": "finalized"
+    },
+    {
+      "label": "no loser stakes 1 GEN NO",
+      "hash": "0xab260623f8f6f358f46b8248cde23dd4d5da4c2541e75b5fe2355c766d7cb175",
+      "status": "finalized"
+    },
+    {
+      "label": "void bettor stakes 2 GEN YES only",
+      "hash": "0xb57cc26739c5e68328eace0cf9ed262e6b05e4e8632405f320bb5daa7b648bad",
+      "status": "finalized"
+    },
+    {
+      "label": "settle before close is rejected",
+      "hash": "0x81087bcf57f5e3401db821e31dc3da29d5a1319093131e329d90d8251b0dfaba",
+      "status": "error"
+    },
+    {
+      "label": "AI settle payout market",
+      "hash": "0x84c5509d7da6ecb21d3b095ff4aecca9c5f6f646361d67967c14c7235ea3bdec",
+      "status": "finalized"
+    },
+    {
+      "label": "winning side claims pro-rata payout",
+      "hash": "0xc60dc2c1b53fd9ea6b87275f4749a94a418e73a1f9a4130408afad427588a3fa",
+      "status": "finalized"
+    },
+    {
+      "label": "double claim is rejected",
+      "hash": "0x380f8167735e80e672787e4f9c86061ae7408f056bdb25b9f056292274ed3e16",
+      "status": "error"
+    },
+    {
+      "label": "non-owner fee collection is rejected",
+      "hash": "0x4c3fe0ab3132a7ca325d2c7c45921cea4dd7c3a513027a8944353c1dac7aaa13",
+      "status": "error"
+    },
+    {
+      "label": "owner collects accrued fee",
+      "hash": "0xaec75df121037ad84d3b3161f56ba7e1d0ea374f877aec85d800c4060207c917",
+      "status": "finalized"
+    },
+    {
+      "label": "AI settle zero-winner market",
+      "hash": "0x65f44970d821f73a8d1d9d016da46b44f3e5d635df0fcf406b8895d75fc2c4db",
+      "status": "finalized"
+    },
+    {
+      "label": "void bettor reclaims full stake",
+      "hash": "0x2d73ff5bfc87943a0244a8ec3a9b3ce33110d0f95e3bd5a1871699ea9cc5d64b",
+      "status": "finalized"
+    },
+    {
+      "label": "double reclaim is rejected",
+      "hash": "0x9f9ebcb00460dc5dd2ad06f6ec8d40f049169eb2da9f5fb2bfb24e88dbb59c67",
+      "status": "error"
+    }
+  ],
+  "failures": []
+}

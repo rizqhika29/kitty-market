@@ -9,6 +9,15 @@ const OWNER_PK = cfg.privateKey;
 
 async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+async function waitUntil(ts) {
+  const target = Number(ts) * 1000 + 5000;
+  while (Date.now() < target) {
+    const left = Math.ceil((target - Date.now()) / 1000);
+    console.log(`  waiting for close time... ${left}s`);
+    await sleep(Math.min(left * 1000, 15000));
+  }
+}
+
 async function sendTx(label, c, fn, args, value) {
   try {
     const h = await c.writeContract({ address: CONTRACT, functionName: fn, args, value: value || BigInt(0) });
@@ -81,8 +90,9 @@ async function main() {
 
   console.log("\n=== OPEN MARKET ===");
   const now = Math.floor(Date.now() / 1000);
+  const closesAt = now + 180;
   await step("open_market", creator.c, "open_market", [
-    "Is the sky blue?", "science", "https://en.wikipedia.org/wiki/Sky", BigInt(now + 86400), BigInt(0), BigInt(0),
+    "Is the sky blue?", "science", "https://en.wikipedia.org/wiki/Sky", BigInt(closesAt), BigInt(0), BigInt(0),
   ]);
   const mid = BigInt(startId);
 
@@ -124,6 +134,9 @@ async function main() {
   } catch (e) { nok("get_trader_positions", e); }
 
   console.log("\n=== SETTLE (yes/no) ===");
+  const early = await sendTx("settle before close", client, "settle_market", [mid]);
+  early.pass ? nok("settle before close", "premature settlement accepted") : ok("settle before close rejected");
+  await waitUntil(closesAt);
   await step("settle_market", client, "settle_market", [mid]);
   let m = JSON.parse(await client.readContract({ address: CONTRACT, functionName: "get_market", args: [mid] }));
   console.log(`  outcome="${m.outcome}" settled=${m.settled} attempts=${m.settle_attempts}`);
