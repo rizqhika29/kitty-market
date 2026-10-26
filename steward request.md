@@ -848,5 +848,5 @@ All nine Steward requests have been addressed:
   provided.
 
 **Contract implementation commit:** `a8eb02aa9b7e837860d646a8721d46b3349c84cb`  
-**Frontend wallet fix commit:** `fc591e0e98bd6647505528e213ed5f7425af8892`  
+**Frontend wallet fix commit:** `5cbee847eee8c32c1f8d661ef5ff837eda218f15`  
 **Corrected contract:** `0xF1c2F3c96d33413D8ca8cFfDe0fe8cE6A3ae95e7`
