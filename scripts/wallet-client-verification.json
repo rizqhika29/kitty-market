@@ -1,0 +1,27 @@
+{
+  "generatedAt": "2026-10-26T04:46:31.835Z",
+  "walletClient": {
+    "account": "0x7072543E0147414879D89c1B1072381AA11a9683",
+    "chain": "Genlayer Studio Network",
+    "chainId": 61999,
+    "accountBound": "0x7072543E0147414879D89c1B1072381AA11a9683"
+  },
+  "scratchContract": "0xcF9FBD46a16Fadb2F0196676595caBA9108F083C",
+  "transactions": [
+    {
+      "label": "Scratch deploy",
+      "hash": "0x4176189dc50fc0bb07fd57042b4a51bbd3c4a2523129f3aa58c0064384f8e372",
+      "status": "Finalized"
+    },
+    {
+      "label": "Create market",
+      "hash": "0x0e6d28f3cc40f377caadf8818ccbd6554a19dedf639a94a9259bedafb77ec500",
+      "status": "Finalized"
+    }
+  ],
+  "createdMarket": {
+    "id": "0",
+    "question": "Wallet client smoke test 2026-10-26T04:45:48.320Z",
+    "host": "0x7072543e0147414879d89c1b1072381aa11a9683"
+  }
+}

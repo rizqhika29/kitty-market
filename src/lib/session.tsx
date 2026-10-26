@@ -12,8 +12,62 @@ import {
 import { type Address, formatEther, parseEther } from "viem";
 import { createClient } from "genlayer-js";
 import { studionet } from "genlayer-js/chains";
+import { toast } from "sonner";
 
 const CONTRACT_ADDRESS = "0xF1c2F3c96d33413D8ca8cFfDe0fe8cE6A3ae95e7";
+const STUDIONET_CHAIN_ID_HEX = `0x${studionet.id.toString(16)}`;
+
+type Eip1193Provider = {
+  request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
+  on?: (event: string, handler: (...args: any[]) => void) => void;
+  removeListener?: (event: string, handler: (...args: any[]) => void) => void;
+};
+
+function getEthereumProvider(): Eip1193Provider | undefined {
+  if (typeof window === "undefined") return undefined;
+  return (window as any).ethereum as Eip1193Provider | undefined;
+}
+
+/**
+ * genlayer-js signs write transactions through the browser wallet, so the
+ * wallet must be on Studionet before `eth_sendTransaction` is called.
+ */
+async function ensureWalletChain() {
+  const provider = getEthereumProvider();
+  if (!provider) return;
+
+  const current = (await provider.request({ method: "eth_chainId" })) as string;
+  if (current?.toLowerCase() === STUDIONET_CHAIN_ID_HEX) return;
+
+  try {
+    await provider.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId: STUDIONET_CHAIN_ID_HEX }],
+    });
+  } catch (switchError: any) {
+    // 4902 = chain not added to the wallet yet
+    if (switchError?.code !== 4902) throw switchError;
+
+    await provider.request({
+      method: "wallet_addEthereumChain",
+      params: [
+        {
+          chainId: STUDIONET_CHAIN_ID_HEX,
+          chainName: studionet.name,
+          nativeCurrency: studionet.nativeCurrency,
+          rpcUrls: studionet.rpcUrls.default.http,
+          blockExplorerUrls: [(studionet as any).blockExplorers?.default?.url].filter(
+            Boolean
+          ),
+        },
+      ],
+    });
+    await provider.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId: STUDIONET_CHAIN_ID_HEX }],
+    });
+  }
+}
 
 interface Session {
   address: Address | null;
@@ -68,35 +122,74 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [totalTraders, setTotalTraders] = useState(0);
   const [totalWagers, setTotalWagers] = useState("0");
 
-  const client = useMemo(
-    () => createClient({ chain: studionet }),
-    []
-  );
+  // Reads never need a wallet, so they keep working while disconnected.
+  const readClient = useMemo(() => createClient({ chain: studionet }), []);
+
+  // Writes must be signed by the connected wallet. The account address is
+  // enough for genlayer-js/viem: the request is routed through the EIP-1193
+  // provider below, which lets the wallet show its confirmation popup.
+  const writeClient = useMemo(() => {
+    if (!address) return null;
+    return createClient({
+      chain: studionet,
+      account: address,
+      provider: getEthereumProvider(),
+    });
+  }, [address]);
+
+  const requireWriteClient = useCallback(() => {
+    if (!address || !writeClient) {
+      throw new Error("Connect your wallet first");
+    }
+    if (!getEthereumProvider()) {
+      throw new Error("No browser wallet detected. Install a wallet to sign transactions.");
+    }
+    return writeClient;
+  }, [address, writeClient]);
+
+  useEffect(() => {
+    const provider = getEthereumProvider();
+    if (!provider?.on || !provider.removeListener) return;
+
+    const handleAccountsChanged = (accounts: string[]) => {
+      if (!accounts?.length) {
+        setAddress(null);
+        setAlias(null);
+        setBalance("0");
+      } else {
+        setAddress(accounts[0] as Address);
+        setAlias(null);
+      }
+    };
+
+    provider.on("accountsChanged", handleAccountsChanged);
+    return () => provider.removeListener?.("accountsChanged", handleAccountsChanged);
+  }, []);
 
   const refreshStats = useCallback(async () => {
     try {
       const [markets, traders, wagers, owner, fees] = await Promise.all([
-        client.readContract({
+        readClient.readContract({
           address: CONTRACT_ADDRESS,
           functionName: "get_total_markets",
           args: [],
         }),
-        client.readContract({
+        readClient.readContract({
           address: CONTRACT_ADDRESS,
           functionName: "get_total_traders",
           args: [],
         }),
-        client.readContract({
+        readClient.readContract({
           address: CONTRACT_ADDRESS,
           functionName: "get_total_wagers",
           args: [],
         }),
-        client.readContract({
+        readClient.readContract({
           address: CONTRACT_ADDRESS,
           functionName: "get_owner",
           args: [],
         }),
-        client.readContract({
+        readClient.readContract({
           address: CONTRACT_ADDRESS,
           functionName: "get_fee_balance",
           args: [],
@@ -110,42 +203,59 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     } catch (e) {
       console.error("Failed to refresh stats", e);
     }
-  }, [client]);
+  }, [readClient]);
 
   const connect = useCallback(async () => {
+    const provider = getEthereumProvider();
+    if (!provider) {
+      toast.error("No browser wallet detected. Install MetaMask or another EVM wallet.");
+      return;
+    }
+
     setConnecting(true);
     try {
-      const accounts = await (window as any).ethereum?.request({
+      const accounts = (await provider.request({
         method: "eth_requestAccounts",
-      });
-      if (accounts?.[0]) {
-        const addr = accounts[0] as Address;
-        setAddress(addr);
+      })) as string[] | undefined;
 
-        const info = await client.readContract({
-          address: CONTRACT_ADDRESS,
-          functionName: "get_trader_info",
-          args: [addr],
-        });
-        if (info !== "unknown trader") {
-          const parsed = JSON.parse(info as string);
-          setAlias(parsed.alias);
-        }
-
-        const bal = await (window as any).ethereum?.request({
-          method: "eth_getBalance",
-          params: [addr, "latest"],
-        });
-        setBalance(formatEther(BigInt(bal)));
-
-        await refreshStats();
+      if (!accounts?.[0]) {
+        toast.error("No wallet account was authorized.");
+        return;
       }
-    } catch (e) {
+
+      const addr = accounts[0] as Address;
+      setAddress(addr);
+
+      try {
+        await ensureWalletChain();
+      } catch {
+        toast.error("Switch your wallet to GenLayer Studionet (Chain ID 61999) to trade.");
+      }
+
+      const info = await readClient.readContract({
+        address: CONTRACT_ADDRESS,
+        functionName: "get_trader_info",
+        args: [addr],
+      });
+      if (info !== "unknown trader") {
+        const parsed = JSON.parse(info as string);
+        setAlias(parsed.alias);
+      }
+
+      const bal = await provider.request({
+        method: "eth_getBalance",
+        params: [addr, "latest"],
+      });
+      setBalance(formatEther(BigInt(bal as string)));
+
+      await refreshStats();
+    } catch (e: any) {
       console.error("Connect failed", e);
+      toast.error(e?.message || "Failed to connect wallet");
     } finally {
       setConnecting(false);
     }
-  }, [client, refreshStats]);
+  }, [readClient, refreshStats]);
 
   const disconnect = useCallback(() => {
     setAddress(null);
@@ -155,17 +265,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   const join = useCallback(
     async (newAlias: string) => {
-      if (!address) throw new Error("Not connected");
+      const client = requireWriteClient();
+      await ensureWalletChain();
       const hash = await client.writeContract({
         address: CONTRACT_ADDRESS,
         functionName: "join",
         args: [newAlias.trim()],
         value: BigInt(0),
       });
-      await client.waitForTransactionReceipt({ hash, status: "FINALIZED" as any });
+      await readClient.waitForTransactionReceipt({ hash, status: "FINALIZED" as any });
       setAlias(newAlias);
     },
-    [client, address]
+    [requireWriteClient]
   );
 
   const openMarket = useCallback(
@@ -184,7 +295,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       minWager: string;
       maxWager: string;
     }) => {
-      if (!address) throw new Error("Not connected");
+      const client = requireWriteClient();
+      await ensureWalletChain();
       const hash = await client.writeContract({
         address: CONTRACT_ADDRESS,
         functionName: "open_market",
@@ -198,14 +310,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         ],
         value: BigInt(0),
       });
-      await client.waitForTransactionReceipt({ hash, status: "FINALIZED" as any });
+      await readClient.waitForTransactionReceipt({ hash, status: "FINALIZED" as any });
     },
-    [client, address]
+    [requireWriteClient]
   );
 
   const takeSide = useCallback(
     async (marketId: string, side: "yes" | "no", amount: string) => {
-      if (!address) throw new Error("Not connected");
+      const client = requireWriteClient();
+      await ensureWalletChain();
       const wei = parseEther(amount);
       const hash = await client.writeContract({
         address: CONTRACT_ADDRESS,
@@ -213,96 +326,101 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         args: [BigInt(marketId), side],
         value: wei,
       });
-      await client.waitForTransactionReceipt({ hash, status: "FINALIZED" as any });
+      await readClient.waitForTransactionReceipt({ hash, status: "FINALIZED" as any });
     },
-    [client, address]
+    [requireWriteClient]
   );
 
   const settleMarket = useCallback(
     async (marketId: string) => {
-      if (!address) throw new Error("Not connected");
+      const client = requireWriteClient();
+      await ensureWalletChain();
       const hash = await client.writeContract({
         address: CONTRACT_ADDRESS,
         functionName: "settle_market",
         args: [marketId],
         value: BigInt(0),
       });
-      await client.waitForTransactionReceipt({ hash, status: "FINALIZED" as any });
+      await readClient.waitForTransactionReceipt({ hash, status: "FINALIZED" as any });
     },
-    [client, address]
+    [requireWriteClient]
   );
 
   const terminalVoid = useCallback(
     async (marketId: string) => {
-      if (!address) throw new Error("Not connected");
+      const client = requireWriteClient();
+      await ensureWalletChain();
       const hash = await client.writeContract({
         address: CONTRACT_ADDRESS,
         functionName: "terminal_void",
         args: [marketId],
         value: BigInt(0),
       });
-      await client.waitForTransactionReceipt({ hash, status: "FINALIZED" as any });
+      await readClient.waitForTransactionReceipt({ hash, status: "FINALIZED" as any });
     },
-    [client, address]
+    [requireWriteClient]
   );
 
   const claimPayout = useCallback(
     async (marketId: string) => {
-      if (!address) throw new Error("Not connected");
+      const client = requireWriteClient();
+      await ensureWalletChain();
       const hash = await client.writeContract({
         address: CONTRACT_ADDRESS,
         functionName: "claim_payout",
         args: [marketId],
         value: BigInt(0),
       });
-      await client.waitForTransactionReceipt({ hash, status: "FINALIZED" as any });
+      await readClient.waitForTransactionReceipt({ hash, status: "FINALIZED" as any });
     },
-    [client, address]
+    [requireWriteClient]
   );
 
   const reclaimStake = useCallback(
     async (marketId: string) => {
-      if (!address) throw new Error("Not connected");
+      const client = requireWriteClient();
+      await ensureWalletChain();
       const hash = await client.writeContract({
         address: CONTRACT_ADDRESS,
         functionName: "reclaim_stake",
         args: [marketId],
         value: BigInt(0),
       });
-      await client.waitForTransactionReceipt({ hash, status: "FINALIZED" as any });
+      await readClient.waitForTransactionReceipt({ hash, status: "FINALIZED" as any });
     },
-    [client, address]
+    [requireWriteClient]
   );
 
   const collectFees = useCallback(
     async (amount: string) => {
-      if (!address) throw new Error("Not connected");
+      const client = requireWriteClient();
+      await ensureWalletChain();
       const hash = await client.writeContract({
         address: CONTRACT_ADDRESS,
         functionName: "collect_fees",
         args: [parseEther(amount)],
         value: BigInt(0),
       });
-      await client.waitForTransactionReceipt({ hash, status: "FINALIZED" as any });
+      await readClient.waitForTransactionReceipt({ hash, status: "FINALIZED" as any });
     },
-    [client, address]
+    [requireWriteClient]
   );
 
   const getMarket = useCallback(
     async (marketId: string) => {
-      const result = await client.readContract({
+      const result = await readClient.readContract({
         address: CONTRACT_ADDRESS,
         functionName: "get_market",
         args: [marketId],
       });
       return JSON.parse(result as string);
     },
-    [client]
+    [readClient]
   );
 
   const getTraderInfo = useCallback(
     async (traderAddress: string) => {
-      const result = await client.readContract({
+      const result = await readClient.readContract({
         address: CONTRACT_ADDRESS,
         functionName: "get_trader_info",
         args: [traderAddress],
@@ -310,29 +428,29 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       if (result === "unknown trader") return null;
       return JSON.parse(result as string);
     },
-    [client]
+    [readClient]
   );
 
   const getTraderPositions = useCallback(
     async (traderAddress: string) => {
-      const result = await client.readContract({
+      const result = await readClient.readContract({
         address: CONTRACT_ADDRESS,
         functionName: "get_trader_positions",
         args: [traderAddress],
       });
       return JSON.parse(result as string);
     },
-    [client]
+    [readClient]
   );
 
   const getTopCats = useCallback(async () => {
-    const result = await client.readContract({
+    const result = await readClient.readContract({
       address: CONTRACT_ADDRESS,
       functionName: "get_top_cats",
       args: [],
     });
     return JSON.parse(result as string);
-  }, [client]);
+  }, [readClient]);
 
   return (
     <SessionContext.Provider

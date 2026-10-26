@@ -120,6 +120,7 @@ get_total_markets()         get_total_wagers()    get_total_traders()
 | Premature terminal void | `terminal_void()` requires the close time plus 5 counted failed attempts. |
 | Wager cap bypass via top-ups | `max_wager` is enforced against the cumulative position (`existing + new`). |
 | No policy for zero winning positions | Such markets resolve as `void` with zero fee, making every stake refundable. |
+| Frontend writes failed with `No account set` | Reads and writes use separate clients; every write is bound to the connected address and signs through the browser wallet, which is switched to Studionet first. |
 
 ## 🚀 Frontend
 
@@ -127,6 +128,20 @@ get_total_markets()         get_total_wagers()    get_total_traders()
 npm install
 npm run dev               # http://localhost:3000
 ```
+
+Market creation and every other state-changing action require a browser wallet
+(MetaMask or any EIP-1193 wallet). The app adds/switches the wallet to GenLayer
+Studionet (chain ID 61999) before sending a transaction, so the wallet shows its
+usual signature prompt.
+
+To verify the wallet client path without a browser:
+
+```bash
+node scripts/verify-wallet-client.js
+```
+
+The script builds the same client the frontend uses, deploys a scratch instance
+of the contract, and creates a market through the provider signing flow.
 
 ## ✅ Tests & linting
 

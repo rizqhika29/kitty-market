@@ -26,6 +26,7 @@ evidence. All work described here is committed and pushed to `main`.
 | 6 | Extend automated tests for every reported scenario | **Fixed** | 17 Direct Mode tests, all passing |
 | 7 | Provide commit hash, test results, Studionet transaction references | **Fixed** | Sections 8–9 of this document |
 | 8 | Confirm frontend uses the corrected deployed contract | **Fixed** | `src/lib/session.tsx` points to the new address; production build passes |
+| 9 | Frontend market creation failed with `No account set...` (Oct 26) | **Fixed** | Dedicated wallet-bound write client + EIP-1193 provider; verified on-chain (section 13) |
 
 ---
 
@@ -543,6 +544,16 @@ const CONTRACT_ADDRESS = "0xF1c2F3c96d33413D8ca8cFfDe0fe8cE6A3ae95e7";
 - Resolved markets use `claim_payout`.
 - Owner fee collection remains available only to the owner.
 
+### Client split
+
+The session uses two genlayer-js clients:
+
+- a **read client** (`createClient({ chain: studionet })`) for view calls, which
+  works without a wallet;
+- a **write client** (`createClient({ chain: studionet, account, provider })`)
+  bound to the connected address and the browser wallet, used by every state
+  changing method. See section 13 for the follow-up fix that introduced it.
+
 ### Verification
 
 ```text
@@ -687,9 +698,140 @@ transaction hashes and statuses.
 
 ---
 
-## 13. Summary
+## 13. Follow-up report (Oct 26, 2026) — `No account set` when creating a market
 
-All eight Steward requests have been addressed:
+### Steward report
+
+> Unable to create market from frontend: "No account set. Configure the client
+> with an account or pass an account to this function."
+
+### Root cause
+
+The session provider created a single genlayer-js client without any signer:
+
+```ts
+const client = useMemo(() => createClient({ chain: studionet }), []);
+```
+
+Reads work in that configuration, but `writeContract()` calls
+`validateAccount(client.account)` before doing anything else, so every write
+threw `No account set`. The failure was not specific to market creation — it
+affected `join`, `open_market`, `take_side`, `settle_market`, `terminal_void`,
+`claim_payout`, `reclaim_stake`, and `collect_fees`. The UI still rendered the
+forms because they were gated only by the locally stored `address` state, which
+had been set by `eth_requestAccounts`.
+
+### Fix implemented
+
+Writes now use a dedicated client bound to the connected wallet, following the
+pattern documented by genlayer-js:
+
+```ts
+const readClient = useMemo(() => createClient({ chain: studionet }), []);
+
+const writeClient = useMemo(() => {
+  if (!address) return null;
+  return createClient({
+    chain: studionet,
+    account: address,
+    provider: getEthereumProvider(), // window.ethereum
+  });
+}, [address]);
+```
+
+With an address (rather than a private-key account) configured, genlayer-js
+routes `eth_sendTransaction` to the provider, so the wallet shows its normal
+signing prompt. A `requireWriteClient()` guard rejects writes while
+disconnected with a clear message instead of a SDK-internal error.
+
+Three supporting changes ship with the fix:
+
+1. **Network guard.** `ensureWalletChain()` checks `eth_chainId` and calls
+   `wallet_switchEthereumChain`, adding Studionet (chain ID 61999) through
+   `wallet_addEthereumChain` when the wallet does not know it yet.
+2. **Connect feedback.** `connect()` now reports a missing wallet, a rejected
+   authorization, or a failed network switch with a toast, and surfaces the
+   wallet's own error message.
+3. **Account changes.** An `accountsChanged` listener keeps session state in
+   sync when the user switches accounts or disconnects inside the wallet, and
+   clears the alias so the new account must register again.
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `src/lib/session.tsx` | Read/write client split, provider + account binding, network guard, connect errors, `accountsChanged` |
+| `scripts/verify-wallet-client.js` | Reproducible wallet-provider verification (deploy + create market) |
+| `scripts/wallet-client-verification.json` | Recorded transaction hashes from the verification run |
+| `README.md` | Frontend wallet requirement and verification command |
+| `steward request.md` | This section |
+
+### Verification
+
+```text
+npm run typecheck  -> PASS
+npm run build      -> PASS
+```
+
+`scripts/verify-wallet-client.js` builds the client exactly like the frontend
+(`account: <address>` plus an EIP-1193 provider), then performs real writes on
+Studionet. The mock provider signs `eth_sendTransaction` with the test key,
+which is what a browser wallet does. The run also writes
+`scripts/wallet-client-verification.json` with every hash.
+
+```text
+Wallet-style write client
+  address : 0x7072543E0147414879D89c1B1072381AA11a9683
+  account : 0x7072543E0147414879D89c1B1072381AA11a9683
+  chain   : Genlayer Studio Network (61999)
+  PASS client binds the wallet account (no 'No account set')
+
+1. Deploying a scratch KittyMarket through the wallet provider ...
+  Scratch deploy: 0x4176189dc50fc0bb07fd57042b4a51bbd3c4a2523129f3aa58c0064384f8e372 (Finalized)
+  contract: 0xcF9FBD46a16Fadb2F0196676595caBA9108F083C
+
+2. Creating a market through the wallet provider ...
+  Create market: 0x0e6d28f3cc40f377caadf8818ccbd6554a19dedf639a94a9259bedafb77ec500 (Finalized)
+
+3. Reading the created market back ...
+  total markets: 1
+  question     : Wallet client smoke test 2026-10-26T04:45:48.320Z
+  host         : 0x7072543e0147414879d89c1b1072381aa11a9683
+  PASS market created by the wallet account
+
+All checks passed.
+```
+
+The same wallet-signed path was also exercised against the **live frontend
+contract** with a `join()` call, which finalized successfully:
+
+| Step | Transaction | Status |
+|---|---|---|
+| Wallet-signed `join()` on `0xF1c2...95e7` | `0xf56d991287233d634e6d84371e4e2805cd6e9b99595963986c6cd4baf8e8a735` | Finalized |
+
+The live contract was deliberately not used for market creation in the script,
+so the public market list stays clean. Market creation itself is exercised on a
+scratch deployment of the identical bytecode and by the earlier contract-level
+verification flow (section 8.4).
+
+Because the fix is client-side, no contract redeployment was required: the
+frontend still points at `0xF1c2F3c96d33413D8ca8cFfDe0fe8cE6A3ae95e7`.
+
+### How to reproduce
+
+```bash
+node scripts/verify-wallet-client.js
+```
+
+In the browser: connect a wallet, let the app add/switch to Studionet, open
+**Launch**, fill in a question, evidence URL, and close date, then submit. The
+wallet prompts for signature and the market is created.
+
+---
+
+## 14. Summary
+
+All nine Steward requests have been addressed:
 
 - unauthorized balance-based withdrawal removed,
 - fee accrued exactly once per market,
@@ -700,8 +842,11 @@ All eight Steward requests have been addressed:
 - wager caps applied to cumulative exposure,
 - expanded tests proving the fixes and accounting invariants,
 - corrected contract deployed and referenced by the frontend,
+- frontend writes bound to the connected wallet, fixing the reported
+  `No account set` failure on market creation (section 13),
 - reproducible commit, test results, and Studionet transaction references
   provided.
 
-**Implementation commit:** `a8eb02aa9b7e837860d646a8721d46b3349c84cb`  
+**Contract implementation commit:** `a8eb02aa9b7e837860d646a8721d46b3349c84cb`  
+**Frontend wallet fix commit:** `fc591e0e98bd6647505528e213ed5f7425af8892`  
 **Corrected contract:** `0xF1c2F3c96d33413D8ca8cFfDe0fe8cE6A3ae95e7`
